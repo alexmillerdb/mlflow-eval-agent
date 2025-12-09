@@ -1,0 +1,19 @@
+[project]
+name = "mlflow-eval-agent"
+version = "0.1.0"
+description = "MLflow Evaluation Agent - A modular, evaluation-driven agent built with Claude Agent SDK"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "claude-agent-sdk",
+    "mlflow[genai]>=3.5.1",
+    "python-dotenv>=1.0.0",
+    "databricks-connect"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

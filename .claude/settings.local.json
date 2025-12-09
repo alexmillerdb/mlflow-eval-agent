@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:mlflow.org)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "mlflow-mcp"
+  ]
+}
