@@ -46,6 +46,8 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
     AssistantMessage,
     TextBlock,
+    ToolUseBlock,
+    ToolResultBlock,
     ResultMessage,
 )
 
@@ -1026,6 +1028,24 @@ class EvalAgentResult:
     session_id: Optional[str] = None
     timing_metrics: Optional[dict] = None  # Issue #13
 
+    # Event type discriminator
+    event_type: str = "text"  # text | tool_use | tool_result | todo_update | subagent | result
+
+    # Tool call fields
+    tool_name: Optional[str] = None
+    tool_input: Optional[dict] = None
+    tool_use_id: Optional[str] = None
+
+    # Tool result fields
+    tool_result: Optional[str] = None
+    tool_is_error: Optional[bool] = None
+
+    # Todo fields
+    todos: Optional[list] = None
+
+    # Subagent fields
+    subagent_name: Optional[str] = None
+
 
 class MLflowEvalAgent:
     """
@@ -1165,6 +1185,45 @@ class MLflowEvalAgent:
                             yield EvalAgentResult(
                                 success=True,
                                 response=response_text,
+                                event_type="text",
+                            )
+
+                        elif isinstance(block, ToolUseBlock):
+                            # Check if it's a subagent (Task tool) or todo update
+                            if block.name == "Task":
+                                yield EvalAgentResult(
+                                    success=True,
+                                    response=response_text,
+                                    event_type="subagent",
+                                    subagent_name=block.input.get("subagent_type", "unknown"),
+                                    tool_use_id=block.id,
+                                )
+                            elif block.name == "TodoWrite":
+                                yield EvalAgentResult(
+                                    success=True,
+                                    response=response_text,
+                                    event_type="todo_update",
+                                    todos=block.input.get("todos", []),
+                                )
+                            else:
+                                yield EvalAgentResult(
+                                    success=True,
+                                    response=response_text,
+                                    event_type="tool_use",
+                                    tool_name=block.name,
+                                    tool_input=block.input,
+                                    tool_use_id=block.id,
+                                )
+
+                        elif isinstance(block, ToolResultBlock):
+                            # Stream tool results
+                            yield EvalAgentResult(
+                                success=not block.is_error if block.is_error is not None else True,
+                                response=response_text,
+                                event_type="tool_result",
+                                tool_use_id=block.tool_use_id,
+                                tool_result=str(block.content)[:500] if block.content else None,
+                                tool_is_error=block.is_error,
                             )
 
                 elif isinstance(message, ResultMessage):
@@ -1175,6 +1234,7 @@ class MLflowEvalAgent:
                     yield EvalAgentResult(
                         success=not message.is_error,
                         response=response_text,
+                        event_type="result",
                         cost_usd=message.total_cost_usd,
                         session_id=message.session_id,
                         timing_metrics=timing,
