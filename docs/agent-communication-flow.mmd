@@ -1,0 +1,60 @@
+sequenceDiagram
+    participant User
+    participant Coordinator as Coordinator Agent
+    participant Task as Task Tool
+    participant TA as trace_analyst
+    participant CE as context_engineer
+    participant AA as agent_architect
+    participant WS as Shared Workspace
+    participant MCP as MLflow MCP Server
+    participant Skills as Skills Layer
+
+    User->>Coordinator: "Analyze my RAG agent's traces"
+    Coordinator->>Coordinator: Build options & load skills
+    Coordinator->>Skills: Load mlflow-evaluation, trace-analysis skills
+    Skills-->>Coordinator: Skill patterns loaded
+
+    Note over Coordinator: Phase 1: Trace Analysis
+    Coordinator->>Task: Delegate trace analysis
+    Task->>TA: Analyze production traces
+    TA->>MCP: search_traces(filter_string)
+    MCP-->>TA: Return trace results
+    TA->>MCP: get_trace(trace_id) [for each]
+    MCP-->>TA: Return trace details
+    TA->>TA: Classify errors, profile latency
+    TA->>WS: write("trace_analysis_summary", findings)
+    TA->>WS: write("error_patterns", errors)
+    TA->>WS: write("performance_metrics", metrics)
+    TA-->>Task: Analysis complete
+    Task-->>Coordinator: trace_analyst results
+
+    Note over Coordinator: Phase 2: Context Engineering
+    Coordinator->>Task: Delegate context optimization
+    Task->>CE: Identify quality issues
+    CE->>WS: read("trace_analysis_summary")
+    WS-->>CE: Return trace findings
+    CE->>Skills: Load context-engineering patterns
+    Skills-->>CE: Context optimization patterns
+    CE->>CE: Analyze context rot, token usage
+    CE->>WS: write("context_recommendations", recommendations)
+    CE-->>Task: Recommendations ready
+    Task-->>Coordinator: context_engineer results
+
+    Note over Coordinator: Phase 3: Architecture Analysis
+    Coordinator->>Task: Delegate architecture review
+    Task->>AA: Analyze agent structure
+    AA->>WS: read("trace_analysis_summary")
+    AA->>WS: read("context_recommendations")
+    WS-->>AA: Return all findings
+    AA->>MCP: set_trace_tag(trace_id, "architecture_issue")
+    MCP-->>AA: Tag set
+    AA-->>Task: Architecture insights
+    Task-->>Coordinator: agent_architect results
+
+    Note over Coordinator: Phase 4: Synthesis & Output
+    Coordinator->>WS: read all workspace data
+    WS-->>Coordinator: Complete findings
+    Coordinator->>Skills: Load eval script templates
+    Skills-->>Coordinator: Scorer patterns, dataset formats
+    Coordinator->>Coordinator: Generate evaluation script
+    Coordinator-->>User: Evaluation suite + recommendations
