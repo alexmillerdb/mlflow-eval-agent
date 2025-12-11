@@ -7,7 +7,7 @@ from unittest import mock
 
 import pytest
 
-from src.agent import EvalAgentConfig
+from src.config import EvalAgentConfig
 
 
 class TestEvalAgentConfigDefaults:
