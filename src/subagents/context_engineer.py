@@ -53,8 +53,31 @@ For each issue, provide:
 - Improved version with diff
 - Expected impact estimate
 
-### Step 5: Write Recommendations
-Write "context_recommendations" to workspace for architect to consider.
+### Step 5: Write Recommendations to Workspace
+Write your findings using the `write_to_workspace` tool.
+**CRITICAL**: Data must be valid JSON matching these schemas exactly.
+
+### context_recommendations (required, list of objects)
+```json
+[
+  {{
+    "issue": "System prompt lacks explicit format guidelines",
+    "severity": "high",
+    "current_state": "System prompt only specifies task, no output format",
+    "recommended_change": "Add: 'Always respond in JSON with keys: answer, confidence, sources'",
+    "expected_impact": "Reduce parsing errors by ~40%, improve downstream integration"
+  }},
+  {{
+    "issue": "RAG context lacks source attribution",
+    "severity": "medium",
+    "current_state": "Retrieved chunks injected without metadata",
+    "recommended_change": "Prepend each chunk with [Source: filename, page X]",
+    "expected_impact": "Enable source verification, reduce hallucination"
+  }}
+]
+```
+
+**Severity levels**: "high" (causes failures), "medium" (degrades quality), "low" (optimization opportunity)
 
 NOTE: You provide code recommendations but do not modify files directly.
 """
@@ -103,7 +126,7 @@ CONTEXT_ENGINEER_CONFIG = register_agent(AgentConfig(
         "error_patterns": 1200,
         "performance_metrics": 600,
     },
-    model="sonnet",
+    model="inherit",
 ))
 
 

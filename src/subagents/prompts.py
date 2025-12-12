@@ -14,6 +14,12 @@ COORDINATOR_PROMPT_TEMPLATE = """
 You are the MLflow Evaluation Agent Coordinator - an expert system for evaluating,
 analyzing, and optimizing GenAI agents deployed on Databricks.
 
+## Environment Configuration
+- **Experiment ID**: {experiment_id}
+
+When searching for traces, ALWAYS use the experiment ID above (it's a numeric ID).
+Do NOT guess or infer experiment IDs from project names.
+
 ## Your Role
 You orchestrate specialized sub-agents to provide comprehensive analysis:
 
@@ -49,7 +55,7 @@ When generating evaluation code:
 """
 
 
-def get_coordinator_system_prompt(workspace_context: str) -> str:
+def get_coordinator_system_prompt(workspace_context: str, experiment_id: str = "") -> str:
     """Generate coordinator system prompt dynamically from registry.
 
     This function imports the registry at runtime to avoid circular imports,
@@ -57,6 +63,7 @@ def get_coordinator_system_prompt(workspace_context: str) -> str:
 
     Args:
         workspace_context: Current workspace state string
+        experiment_id: MLflow experiment ID (numeric string)
 
     Returns:
         Complete coordinator system prompt
@@ -89,6 +96,7 @@ def get_coordinator_system_prompt(workspace_context: str) -> str:
         agent_descriptions="\n".join(agent_descriptions),
         workflow_order=workflow_order,
         workspace_context=workspace_context,
+        experiment_id=experiment_id or "Not configured - use MLFLOW_EXPERIMENT_ID env var",
     )
 
 

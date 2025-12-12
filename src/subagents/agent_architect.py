@@ -120,7 +120,7 @@ AGENT_ARCHITECT_CONFIG = register_agent(AgentConfig(
         "performance_metrics": 800,
         "context_recommendations": 1500,
     },
-    model="sonnet",
+    model="inherit",
 ))
 
 

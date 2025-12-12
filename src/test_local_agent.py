@@ -183,7 +183,7 @@ def run_selective_context_tests() -> dict:
     try:
         workspace = SharedWorkspace()
         workspace.write("trace_analysis_summary", {"error_rate": 0.05}, agent="trace_analyst")
-        workspace.write("error_patterns", [{"type": "timeout"}], agent="trace_analyst")
+        workspace.write("error_patterns", [{"error_type": "timeout", "count": 1}], agent="trace_analyst")
 
         # Now context_engineer should be able to run
         can_run, missing, msg = validate_agent_can_run("context_engineer", workspace)
@@ -201,8 +201,8 @@ def run_selective_context_tests() -> dict:
     try:
         workspace = SharedWorkspace()
         workspace.write("trace_analysis_summary", {"error_rate": 0.05}, agent="trace_analyst")
-        workspace.write("error_patterns", [{"type": "timeout"}], agent="trace_analyst")
-        workspace.write("context_recommendations", [{"issue": "prompt too long"}], agent="context_engineer")
+        workspace.write("error_patterns", [{"error_type": "timeout", "count": 1}], agent="trace_analyst")
+        workspace.write("context_recommendations", [{"issue": "prompt too long", "recommended_change": "shorten prompt"}], agent="context_engineer")
         workspace.write("unrelated_data", {"foo": "bar"}, agent="other")
 
         # context_engineer should get trace_analysis_summary and error_patterns

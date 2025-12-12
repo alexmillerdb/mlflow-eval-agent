@@ -90,7 +90,7 @@ def validate_agent_can_run(
     return workspace.check_agent_dependencies(config)
 
 
-def get_coordinator_prompt(workspace: SharedWorkspace) -> str:
+def get_coordinator_prompt(workspace: SharedWorkspace, experiment_id: str = "") -> str:
     """Get coordinator system prompt with current workspace state.
 
     Generates the coordinator prompt dynamically from the registry,
@@ -98,12 +98,13 @@ def get_coordinator_prompt(workspace: SharedWorkspace) -> str:
 
     Args:
         workspace: SharedWorkspace instance for context injection
+        experiment_id: MLflow experiment ID (numeric string)
 
     Returns:
         Complete coordinator system prompt
     """
     workspace_context = workspace.to_context_string() or "Empty - no analysis run yet."
-    return get_coordinator_system_prompt(workspace_context)
+    return get_coordinator_system_prompt(workspace_context, experiment_id=experiment_id)
 
 
 __all__ = [

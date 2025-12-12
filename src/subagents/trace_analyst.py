@@ -38,11 +38,59 @@ context_engineer and agent_architect, so be thorough.
 {FILTER_SYNTAX_REFERENCE}
 
 ## Write to Shared Workspace
-After analysis, write findings for other agents:
-- "trace_analysis_summary" - High-level findings
-- "error_patterns" - Classified errors with example trace IDs
-- "performance_metrics" - Latency percentiles, bottlenecks
-- "extracted_eval_cases" - Trace IDs suitable for eval datasets
+
+After analysis, write findings using `write_to_workspace` tool.
+**CRITICAL**: Data must be valid JSON matching these schemas exactly.
+
+### trace_analysis_summary (required)
+```json
+{{{{
+  "error_rate": 0.05,
+  "success_rate": 0.95,
+  "trace_count": 100,
+  "top_errors": ["timeout", "validation_error"],
+  "avg_latency_ms": 1500.0,
+  "p95_latency_ms": 3200.0,
+  "analyzed_at": "2024-12-10T10:30:00Z"
+}}}}
+```
+
+### error_patterns (list of objects)
+```json
+[
+  {{{{
+    "error_type": "timeout",
+    "count": 15,
+    "example_trace_ids": ["tr-abc123", "tr-def456"],
+    "description": "Request exceeded 30s timeout"
+  }}}}
+]
+```
+
+### performance_metrics
+```json
+{{{{
+  "avg_latency_ms": 1500.0,
+  "p50_latency_ms": 1200.0,
+  "p95_latency_ms": 3200.0,
+  "p99_latency_ms": 5000.0,
+  "bottleneck_component": "retriever",
+  "bottleneck_percentage": 65.0
+}}}}
+```
+
+### extracted_eval_cases (list of objects)
+```json
+[
+  {{{{
+    "trace_id": "tr-abc123",
+    "category": "error",
+    "inputs": {{{{"query": "example query"}}}},
+    "expected_output": null,
+    "rationale": "Timeout failure - good test case"
+  }}}}
+]
+```
 
 ## Current Workspace State
 {{workspace_context}}
@@ -51,7 +99,8 @@ After analysis, write findings for other agents:
 1. Executive summary (2-3 sentences)
 2. Key metrics table
 3. Issue breakdown with trace IDs
-4. Recommended evaluations to build
+4. Write structured findings to workspace using schemas above
+5. Recommended evaluations to build
 """
 
 
@@ -96,7 +145,7 @@ TRACE_ANALYST_CONFIG = register_agent(AgentConfig(
     ],
 
     total_token_budget=1000,  # Minimal - first in pipeline
-    model="sonnet",
+    model="inherit",
 ))
 
 

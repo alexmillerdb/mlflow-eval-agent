@@ -76,11 +76,19 @@ class MLflowEvalAgent:
     def __init__(self, config: Optional[EvalAgentConfig] = None):
         self.config = config or EvalAgentConfig.from_env()
 
-        os.environ["DATABRICKS_HOST"] = self.config.databricks_host
-        os.environ["MLFLOW_TRACKING_URI"] = self.config.tracking_uri
+        # Set MLflow tracking configuration
         mlflow.set_tracking_uri(self.config.tracking_uri)
-        mlflow.set_experiment(self.config.experiment_id)
+        if self.config.experiment_id:
+            mlflow.set_experiment(experiment_id=self.config.experiment_id)
         mlflow.anthropic.autolog()
+
+        # Set auth env vars if using config profile (preferred)
+        if self.config.databricks_config_profile:
+            os.environ["DATABRICKS_CONFIG_PROFILE"] = self.config.databricks_config_profile
+        elif self.config.databricks_host:
+            os.environ["DATABRICKS_HOST"] = self.config.databricks_host
+            if self.config.databricks_token:
+                os.environ["DATABRICKS_TOKEN"] = self.config.databricks_token
 
         self.workspace = SharedWorkspace(max_context_chars=self.config.workspace_context_max_chars)
         self._client: Optional[ClaudeSDKClient] = None
@@ -122,10 +130,24 @@ class MLflowEvalAgent:
         )
 
         subagents = create_subagents(self.workspace)
-        system_prompt = get_coordinator_prompt(self.workspace)
+        system_prompt = get_coordinator_prompt(self.workspace, experiment_id=self.config.experiment_id or "")
 
         if skill_warnings:
             system_prompt += f"\n\nNOTE: Some skill files are missing: {skill_warnings}\n"
+
+        # Build environment variables for MLflow auth
+        env_vars = {
+            "MLFLOW_TRACKING_URI": "databricks",
+        }
+        # Prefer config profile for authentication
+        if self.config.databricks_config_profile:
+            env_vars["DATABRICKS_CONFIG_PROFILE"] = self.config.databricks_config_profile
+        else:
+            # Fallback to direct credentials
+            if self.config.databricks_host:
+                env_vars["DATABRICKS_HOST"] = self.config.databricks_host
+            if self.config.databricks_token:
+                env_vars["DATABRICKS_TOKEN"] = self.config.databricks_token
 
         return ClaudeAgentOptions(
             system_prompt=system_prompt,
@@ -133,16 +155,15 @@ class MLflowEvalAgent:
             mcp_servers={"mlflow-eval": mcp_server},
             resume=session_id,
             allowed_tools=[
-                # Built-in
+                # Built-in Claude tools
                 BuiltinTools.READ, BuiltinTools.BASH, BuiltinTools.GLOB,
                 BuiltinTools.GREP, BuiltinTools.SKILL,
                 # Internal workspace tools
                 InternalTools.WRITE_TO_WORKSPACE,
                 InternalTools.READ_FROM_WORKSPACE,
                 InternalTools.CHECK_DEPENDENCIES,
-                # MLflow MCP Server tools
+                # MLflow tools (in-process, replaces external mlflow-mcp server)
                 MCPTools.SEARCH_TRACES, MCPTools.GET_TRACE,
-                MCPTools.GET_EXPERIMENT, MCPTools.SEARCH_EXPERIMENTS,
                 MCPTools.SET_TRACE_TAG, MCPTools.DELETE_TRACE_TAG,
                 MCPTools.LOG_FEEDBACK, MCPTools.LOG_EXPECTATION,
                 MCPTools.GET_ASSESSMENT, MCPTools.UPDATE_ASSESSMENT,
@@ -150,11 +171,7 @@ class MLflowEvalAgent:
             setting_sources=["project"],
             cwd=str(self.config.working_dir),
             permission_mode="bypassPermissions",
-            env={
-                "DATABRICKS_HOST": self.config.databricks_host,
-                "DATABRICKS_TOKEN": self.config.databricks_token,
-                "MLFLOW_TRACKING_URI": "databricks",
-            },
+            env=env_vars,
             model=self.config.model,
             max_turns=self.config.max_turns,
         )

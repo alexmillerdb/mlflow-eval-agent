@@ -3,7 +3,9 @@
 import json
 import logging
 import time
-from typing import Any, Optional, TypedDict, TYPE_CHECKING
+from typing import Any, Optional, Union, TYPE_CHECKING
+
+from pydantic import BaseModel, Field, ValidationError
 
 if TYPE_CHECKING:
     from .subagents.registry import AgentConfig
@@ -12,72 +14,150 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# WORKSPACE SCHEMAS
+# WORKSPACE SCHEMAS (Pydantic Models)
 # =============================================================================
 
-class TraceAnalysisSummary(TypedDict, total=False):
+class TraceAnalysisSummary(BaseModel):
     """Schema for trace_analysis_summary workspace entry."""
-    error_rate: float
-    success_rate: float
-    trace_count: int
-    top_errors: list[str]
-    avg_latency_ms: float
-    p95_latency_ms: float
-    analyzed_at: str
+    error_rate: Optional[float] = Field(None, ge=0, le=1, description="Fraction of traces with errors")
+    success_rate: Optional[float] = Field(None, ge=0, le=1, description="Fraction of successful traces")
+    trace_count: Optional[int] = Field(None, ge=0, description="Total traces analyzed")
+    top_errors: list[str] = Field(default_factory=list, description="Most common error types")
+    avg_latency_ms: Optional[float] = Field(None, description="Average latency in ms")
+    p95_latency_ms: Optional[float] = Field(None, description="95th percentile latency")
+    analyzed_at: Optional[str] = Field(None, description="ISO timestamp of analysis")
+
+    # Allow extra fields for flexibility
+    model_config = {"extra": "allow"}
 
 
-class ErrorPattern(TypedDict, total=False):
-    """Schema for error_patterns workspace entry."""
-    error_type: str
-    count: int
-    example_trace_ids: list[str]
-    description: str
+class ErrorPattern(BaseModel):
+    """Schema for individual error pattern."""
+    error_type: str = Field(..., description="Type/category of error")
+    count: int = Field(0, ge=0, description="Number of occurrences")
+    example_trace_ids: list[str] = Field(default_factory=list, description="Example trace IDs")
+    description: Optional[str] = Field(None, description="Error description")
+
+    model_config = {"extra": "allow"}
 
 
-class PerformanceMetrics(TypedDict, total=False):
+class PerformanceMetrics(BaseModel):
     """Schema for performance_metrics workspace entry."""
-    avg_latency_ms: float
-    p50_latency_ms: float
-    p95_latency_ms: float
-    p99_latency_ms: float
-    bottleneck_component: str
-    bottleneck_percentage: float
+    avg_latency_ms: Optional[float] = Field(None, description="Average latency")
+    p50_latency_ms: Optional[float] = Field(None, description="Median latency")
+    p95_latency_ms: Optional[float] = Field(None, description="95th percentile latency")
+    p99_latency_ms: Optional[float] = Field(None, description="99th percentile latency")
+    bottleneck_component: Optional[str] = Field(None, description="Component causing bottleneck")
+    bottleneck_percentage: Optional[float] = Field(None, ge=0, le=100, description="Percentage of time in bottleneck")
+
+    model_config = {"extra": "allow"}
 
 
-class ContextRecommendation(TypedDict, total=False):
-    """Schema for context_recommendations workspace entry."""
-    issue: str
-    severity: str  # "high", "medium", "low"
-    current_state: str
-    recommended_change: str
-    expected_impact: str
+class ContextRecommendation(BaseModel):
+    """Schema for individual context recommendation."""
+    issue: str = Field(..., description="Issue identified")
+    severity: str = Field("medium", description="Severity: high, medium, low")
+    current_state: Optional[str] = Field(None, description="Current state description")
+    recommended_change: str = Field(..., description="Recommended change")
+    expected_impact: Optional[str] = Field(None, description="Expected impact of change")
+
+    model_config = {"extra": "allow"}
 
 
-WORKSPACE_SCHEMAS: dict[str, type] = {
+class ExtractedEvalCase(BaseModel):
+    """Schema for extracted evaluation case."""
+    trace_id: str = Field(..., description="Source trace ID")
+    category: Optional[str] = Field(None, description="Category: error, success, edge_case")
+    inputs: Optional[dict] = Field(None, description="Input data")
+    expected_output: Optional[str] = Field(None, description="Expected output")
+    rationale: Optional[str] = Field(None, description="Why this was selected")
+
+    model_config = {"extra": "allow"}
+
+
+# Registry mapping workspace keys to Pydantic models
+# None means list validation only, model means validate each item
+WORKSPACE_SCHEMAS: dict[str, Optional[type[BaseModel]]] = {
     "trace_analysis_summary": TraceAnalysisSummary,
-    "error_patterns": list,
+    "error_patterns": ErrorPattern,  # List of ErrorPattern
     "performance_metrics": PerformanceMetrics,
-    "context_recommendations": list,
-    "extracted_eval_cases": list,
-    "quality_issues": list,
+    "context_recommendations": ContextRecommendation,  # List of ContextRecommendation
+    "extracted_eval_cases": ExtractedEvalCase,  # List of ExtractedEvalCase
+    "quality_issues": None,  # Untyped list
 }
 
+# Keys that expect lists
+LIST_KEYS = {"error_patterns", "context_recommendations", "extracted_eval_cases", "quality_issues"}
 
-def validate_workspace_entry(key: str, data: Any) -> tuple[bool, str]:
-    """Validate workspace entry against schema. Returns (is_valid, message)."""
+
+def validate_workspace_entry(key: str, data: Any) -> tuple[bool, Any, str]:
+    """Validate and parse workspace entry against schema.
+
+    Returns (is_valid, parsed_data, message).
+    parsed_data is the validated/coerced data if valid, or original data if no schema.
+    """
+    # Handle JSON string input
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError as e:
+            return False, data, f"Invalid JSON for key '{key}': {e}"
+
+    # No schema defined - accept as-is
     if key not in WORKSPACE_SCHEMAS:
-        return True, f"Warning: No schema defined for key '{key}'"
+        return True, data, f"Warning: No schema defined for key '{key}'"
 
-    expected_type = WORKSPACE_SCHEMAS[key]
+    schema = WORKSPACE_SCHEMAS[key]
 
-    if expected_type == list:
+    # List keys
+    if key in LIST_KEYS:
         if not isinstance(data, list):
-            return False, f"Expected list for key '{key}', got {type(data).__name__}"
-    elif hasattr(expected_type, "__annotations__"):
-        if not isinstance(data, dict):
-            return False, f"Expected dict for key '{key}', got {type(data).__name__}"
+            return False, data, f"Expected list for key '{key}', got {type(data).__name__}"
 
-    return True, "Valid"
+        # Validate each item if schema exists
+        if schema is not None:
+            validated_items = []
+            for i, item in enumerate(data):
+                try:
+                    validated = schema.model_validate(item)
+                    validated_items.append(validated.model_dump())
+                except ValidationError as e:
+                    return False, data, f"Item {i} in '{key}' failed validation: {e}"
+            return True, validated_items, "Valid"
+
+        return True, data, "Valid"
+
+    # Single object keys
+    if schema is not None:
+        try:
+            validated = schema.model_validate(data)
+            return True, validated.model_dump(), "Valid"
+        except ValidationError as e:
+            return False, data, f"Validation failed for '{key}': {e}"
+
+    # No schema, just type check
+    if not isinstance(data, dict):
+        return False, data, f"Expected dict for key '{key}', got {type(data).__name__}"
+
+    return True, data, "Valid"
+
+
+def get_schema_json(key: str) -> Optional[dict]:
+    """Get JSON schema for a workspace key (for prompt injection)."""
+    if key not in WORKSPACE_SCHEMAS:
+        return None
+
+    schema = WORKSPACE_SCHEMAS[key]
+    if schema is None:
+        return {"type": "array", "items": {}}
+
+    if key in LIST_KEYS:
+        return {
+            "type": "array",
+            "items": schema.model_json_schema()
+        }
+
+    return schema.model_json_schema()
 
 
 # =============================================================================
@@ -98,14 +178,19 @@ class SharedWorkspace:
         self._write_history: list[dict] = []
 
     def write(self, key: str, data: Any, agent: str = "unknown") -> tuple[bool, str]:
-        """Write data to workspace with validation. Returns (success, message)."""
-        is_valid, msg = validate_workspace_entry(key, data)
+        """Write data to workspace with validation. Returns (success, message).
+
+        Data can be a dict/list or a JSON string. JSON strings will be parsed
+        and validated against the schema for the key.
+        """
+        is_valid, parsed_data, msg = validate_workspace_entry(key, data)
         if not is_valid:
             logger.warning(f"Workspace validation failed: {msg}")
             return False, msg
 
+        # Store the validated/parsed data
         self._data[key] = {
-            "data": data,
+            "data": parsed_data,
             "written_by": agent,
             "timestamp": time.time(),
         }
