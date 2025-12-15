@@ -458,10 +458,11 @@ class TestCreateSubagentsIntegration:
         """create_subagents should handle empty workspace gracefully."""
         agents = create_subagents(workspace, use_selective_context=True)
 
-        assert len(agents) == 3
+        assert len(agents) == 4
         assert "trace_analyst" in agents
         assert "context_engineer" in agents
         assert "agent_architect" in agents
+        assert "eval_runner" in agents
 
         # All should have valid prompts
         for name, agent in agents.items():

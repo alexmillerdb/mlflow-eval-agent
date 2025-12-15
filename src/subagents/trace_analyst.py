@@ -1,10 +1,50 @@
 """Trace Analyst sub-agent definition."""
 
-from claude_agent_sdk import AgentDefinition
-
 from ..tools import MCPTools, InternalTools, BuiltinTools
 from .registry import AgentConfig, register_agent
-from .prompts import MCP_SEARCH_EXAMPLE, MCP_GET_TRACE_EXAMPLE, MCP_LOG_FEEDBACK_EXAMPLE, FILTER_SYNTAX_REFERENCE
+
+
+# =============================================================================
+# MCP TOOL EXAMPLES (used in prompt)
+# =============================================================================
+
+MCP_SEARCH_EXAMPLE = """
+mcp__mlflow-mcp__search_traces(
+    experiment_id="...",
+    filter_string="attributes.status = 'ERROR' AND timestamp_ms > {{yesterday_ms}}",
+    extract_fields="info.trace_id,info.status,info.execution_time_ms",
+    max_results=50
+)
+"""
+
+MCP_GET_TRACE_EXAMPLE = """
+mcp__mlflow-mcp__get_trace(
+    trace_id="tr-abc123",
+    extract_fields="info.*,data.spans.*.name,data.spans.*.span_type"
+)
+"""
+
+MCP_LOG_FEEDBACK_EXAMPLE = """
+mcp__mlflow-mcp__log_feedback(
+    trace_id="tr-abc123",
+    name="analysis_finding",
+    value="high_latency",
+    source_type="CODE",
+    rationale="RAG span took 3.2s, exceeding 2s threshold"
+)
+"""
+
+FILTER_SYNTAX_REFERENCE = """
+## Query Syntax Reference
+| Pattern | Example |
+|---------|---------|
+| Status | `attributes.status = 'OK'` |
+| Time | `timestamp_ms > {{ms}}` |
+| Trace name | attributes.`mlflow.traceName` = 'agent' |
+| Latency | `attributes.execution_time_ms > 5000` |
+| Tags | `tags.environment = 'production'` |
+| Combined | `attributes.status = 'ERROR' AND timestamp_ms > {{yesterday}}` |
+"""
 
 
 # =============================================================================
@@ -146,22 +186,5 @@ TRACE_ANALYST_CONFIG = register_agent(AgentConfig(
 
     total_token_budget=1000,  # Minimal - first in pipeline
     model="inherit",
+    max_turns=12,  # Limit turns to prevent runaway analysis
 ))
-
-
-# =============================================================================
-# AGENT FACTORY (for backwards compatibility)
-# =============================================================================
-
-def create_trace_analyst(workspace_context: str) -> AgentDefinition:
-    """Create the trace analyst sub-agent.
-
-    This function is kept for backwards compatibility.
-    The preferred approach is to use TRACE_ANALYST_CONFIG with the registry.
-    """
-    return AgentDefinition(
-        description=TRACE_ANALYST_CONFIG.description,
-        prompt=TRACE_ANALYST_CONFIG.prompt_template.format(workspace_context=workspace_context),
-        tools=TRACE_ANALYST_CONFIG.tools,
-        model=TRACE_ANALYST_CONFIG.model,
-    )

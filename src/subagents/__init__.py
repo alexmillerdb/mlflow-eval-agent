@@ -12,14 +12,16 @@ from .registry import AGENT_REGISTRY, AgentConfig, register_agent, get_workflow_
 from . import trace_analyst
 from . import context_engineer
 from . import agent_architect
+from . import eval_runner
 
-# Import prompts for coordinator
-from .prompts import get_coordinator_system_prompt
+# Import coordinator prompt generator
+from .coordinator import get_coordinator_system_prompt
 
 # Re-export individual configs for direct access
 from .trace_analyst import TRACE_ANALYST_CONFIG
 from .context_engineer import CONTEXT_ENGINEER_CONFIG
 from .agent_architect import AGENT_ARCHITECT_CONFIG
+from .eval_runner import EVAL_RUNNER_CONFIG
 
 
 def create_subagents(
@@ -52,6 +54,8 @@ def create_subagents(
             # Full context: all keys (legacy behavior)
             workspace_context = workspace.to_context_string() or "No data in workspace yet."
 
+        # Note: max_turns is stored in config for coordinator reference
+        # The Claude SDK doesn't support max_turns in AgentDefinition directly
         agents[name] = AgentDefinition(
             description=config.description,
             prompt=config.prompt_template.format(workspace_context=workspace_context),
@@ -122,6 +126,7 @@ __all__ = [
     "TRACE_ANALYST_CONFIG",
     "CONTEXT_ENGINEER_CONFIG",
     "AGENT_ARCHITECT_CONFIG",
+    "EVAL_RUNNER_CONFIG",
     # Tool constants
     "MCPTools",
     "InternalTools",
