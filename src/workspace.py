@@ -3,7 +3,8 @@
 import json
 import logging
 import time
-from typing import Any, Optional, Union, TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional, Union, TYPE_CHECKING
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -11,6 +12,34 @@ if TYPE_CHECKING:
     from .subagents.registry import AgentConfig
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# CACHE INFRASTRUCTURE
+# =============================================================================
+
+@dataclass
+class CacheEntry:
+    """A cached entry with TTL tracking."""
+    data: Any
+    created_at: float = field(default_factory=time.time)
+    ttl_seconds: int = 300  # 5 minutes default
+
+    @property
+    def is_expired(self) -> bool:
+        """Check if entry has exceeded its TTL."""
+        return time.time() - self.created_at > self.ttl_seconds
+
+    @property
+    def age_seconds(self) -> float:
+        """Get age of entry in seconds."""
+        return time.time() - self.created_at
+
+    @property
+    def remaining_ttl(self) -> float:
+        """Get remaining TTL in seconds (0 if expired)."""
+        remaining = self.ttl_seconds - self.age_seconds
+        return max(0, remaining)
 
 
 # =============================================================================
@@ -75,6 +104,28 @@ class ExtractedEvalCase(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class EvalResults(BaseModel):
+    """Schema for eval_results workspace entry (from eval_runner sub-agent)."""
+    scorer_results: dict[str, float] = Field(default_factory=dict, description="Scorer name -> score")
+    pass_rate: float = Field(0.0, ge=0, le=1, description="Fraction of test cases passed")
+    failed_cases: list[dict] = Field(default_factory=list, description="Details of failed test cases")
+    recommendations: list[str] = Field(default_factory=list, description="Improvement recommendations")
+    eval_run_id: Optional[str] = Field(None, description="MLflow run ID for the evaluation")
+    executed_at: Optional[str] = Field(None, description="ISO timestamp of execution")
+
+    model_config = {"extra": "allow"}
+
+
+class GeneratedEvalCode(BaseModel):
+    """Schema for generated_eval_code workspace entry."""
+    code: str = Field(..., description="Python code for evaluation")
+    scorers: list[str] = Field(default_factory=list, description="Scorers used in evaluation")
+    dataset_size: Optional[int] = Field(None, description="Number of test cases")
+    file_path: Optional[str] = Field(None, description="Path where code was written")
+
+    model_config = {"extra": "allow"}
+
+
 # Registry mapping workspace keys to Pydantic models
 # None means list validation only, model means validate each item
 WORKSPACE_SCHEMAS: dict[str, Optional[type[BaseModel]]] = {
@@ -84,6 +135,9 @@ WORKSPACE_SCHEMAS: dict[str, Optional[type[BaseModel]]] = {
     "context_recommendations": ContextRecommendation,  # List of ContextRecommendation
     "extracted_eval_cases": ExtractedEvalCase,  # List of ExtractedEvalCase
     "quality_issues": None,  # Untyped list
+    # Eval loop schemas
+    "eval_results": EvalResults,
+    "generated_eval_code": GeneratedEvalCode,
 }
 
 # Keys that expect lists
@@ -168,14 +222,126 @@ class SharedWorkspace:
     """Shared workspace for inter-agent communication.
 
     Sub-agents write findings here, other agents can read them.
-    Instance-scoped (not global singleton) with schema validation.
+    Instance-scoped (not global singleton) with schema validation and caching.
+
+    Features:
+    - Pydantic schema validation for structured data
+    - TTL-based caching to avoid redundant sub-agent work
+    - Selective context injection per agent
+    - Write history tracking for debugging
     """
 
-    def __init__(self, max_context_chars: int = 2000):
+    def __init__(
+        self,
+        max_context_chars: int = 2000,
+        default_ttl_seconds: int = 300,
+    ):
         self._data: dict[str, Any] = {}
         self._timestamps: dict[str, float] = {}
         self._max_context_chars = max_context_chars
+        self._default_ttl = default_ttl_seconds
         self._write_history: list[dict] = []
+        # Cache for expensive computations (e.g., trace analysis results)
+        self._cache: dict[str, CacheEntry] = {}
+
+    # =========================================================================
+    # CACHING METHODS
+    # =========================================================================
+
+    def get_cached(self, key: str) -> Optional[Any]:
+        """Get a cached value if it exists and hasn't expired.
+
+        Returns None if key not in cache or TTL expired.
+        """
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        if entry.is_expired:
+            del self._cache[key]
+            logger.debug(f"Cache expired for key: {key}")
+            return None
+        logger.debug(f"Cache hit for key: {key} (age: {entry.age_seconds:.1f}s)")
+        return entry.data
+
+    def set_cached(
+        self,
+        key: str,
+        data: Any,
+        ttl_seconds: Optional[int] = None
+    ) -> None:
+        """Set a cached value with TTL.
+
+        Args:
+            key: Cache key
+            data: Data to cache
+            ttl_seconds: TTL in seconds (uses default if not specified)
+        """
+        ttl = ttl_seconds if ttl_seconds is not None else self._default_ttl
+        self._cache[key] = CacheEntry(data=data, ttl_seconds=ttl)
+        logger.debug(f"Cached key: {key} (ttl: {ttl}s)")
+
+    def get_or_compute(
+        self,
+        key: str,
+        compute_fn: Callable[[], Any],
+        ttl_seconds: Optional[int] = None
+    ) -> Any:
+        """Get cached value or compute and cache it.
+
+        This is the primary caching interface for expensive operations.
+
+        Args:
+            key: Cache key
+            compute_fn: Function to compute the value if not cached
+            ttl_seconds: TTL in seconds (uses default if not specified)
+
+        Returns:
+            Cached or computed value
+        """
+        cached = self.get_cached(key)
+        if cached is not None:
+            return cached
+
+        logger.info(f"Cache miss for key: {key}, computing...")
+        result = compute_fn()
+        self.set_cached(key, result, ttl_seconds)
+        return result
+
+    def invalidate_cache(self, key: Optional[str] = None) -> int:
+        """Invalidate cached entries.
+
+        Args:
+            key: Specific key to invalidate, or None to clear all cache
+
+        Returns:
+            Number of entries invalidated
+        """
+        if key is not None:
+            if key in self._cache:
+                del self._cache[key]
+                logger.debug(f"Invalidated cache key: {key}")
+                return 1
+            return 0
+
+        count = len(self._cache)
+        self._cache.clear()
+        logger.debug(f"Invalidated all {count} cache entries")
+        return count
+
+    def cache_stats(self) -> dict:
+        """Get cache statistics."""
+        valid_entries = {k: v for k, v in self._cache.items() if not v.is_expired}
+        expired_entries = {k: v for k, v in self._cache.items() if v.is_expired}
+        return {
+            "total_entries": len(self._cache),
+            "valid_entries": len(valid_entries),
+            "expired_entries": len(expired_entries),
+            "keys": list(valid_entries.keys()),
+        }
+
+    # =========================================================================
+    # WORKSPACE METHODS
+    # =========================================================================
 
     def write(self, key: str, data: Any, agent: str = "unknown") -> tuple[bool, str]:
         """Write data to workspace with validation. Returns (success, message).
@@ -267,17 +433,143 @@ Use read_from_workspace tool to get full content.
         parts.append("</shared_workspace>")
         return "\n".join(parts)
 
-    def clear(self):
-        """Clear all workspace data."""
+    def clear(self, clear_cache: bool = True):
+        """Clear all workspace data.
+
+        Args:
+            clear_cache: Also clear the computation cache (default True)
+        """
         self._data.clear()
         self._timestamps.clear()
         self._write_history.clear()
+        if clear_cache:
+            self._cache.clear()
 
     # =========================================================================
     # SELECTIVE CONTEXT INJECTION
     # =========================================================================
 
-    def to_selective_context(self, config: "AgentConfig") -> str:
+    def compute_dynamic_budget(self, config: "AgentConfig") -> int:
+        """Compute dynamic token budget based on workspace content size.
+
+        Adjusts the agent's token budget based on how much data is in the workspace.
+        When workspace is sparse, use full budget. When dense, compress to essentials.
+
+        Args:
+            config: AgentConfig with total_token_budget
+
+        Returns:
+            Adjusted token budget
+        """
+        if not self._data:
+            return config.total_token_budget
+
+        # Calculate total workspace content size
+        total_chars = sum(
+            len(json.dumps(entry["data"], default=str))
+            for entry in self._data.values()
+        )
+
+        base_budget = config.total_token_budget
+
+        # Scale budget based on content density
+        if total_chars < 2000:
+            # Sparse workspace - use full budget
+            return base_budget
+        elif total_chars < 10000:
+            # Moderate workspace - 85% budget
+            return int(base_budget * 0.85)
+        elif total_chars < 50000:
+            # Dense workspace - 70% budget, focus on essentials
+            return int(base_budget * 0.70)
+        else:
+            # Very dense workspace - 50% budget, aggressive compression
+            return int(base_budget * 0.50)
+
+    def summarize_entry(self, key: str, max_chars: int = 500) -> Optional[str]:
+        """Generate an intelligent summary of a workspace entry.
+
+        Instead of truncating data, this creates a meaningful summary that
+        preserves key information while reducing token usage.
+
+        Args:
+            key: Workspace entry key
+            max_chars: Maximum characters for the summary
+
+        Returns:
+            Summary string or None if key doesn't exist
+        """
+        entry = self._data.get(key)
+        if not entry:
+            return None
+
+        data = entry["data"]
+
+        # Handle different data types
+        if isinstance(data, list):
+            return self._summarize_list(data, max_chars)
+        elif isinstance(data, dict):
+            return self._summarize_dict(data, max_chars)
+        else:
+            return str(data)[:max_chars]
+
+    def _summarize_list(self, data: list, max_chars: int) -> str:
+        """Summarize a list with item counts and samples."""
+        if not data:
+            return "Empty list"
+
+        count = len(data)
+        if count <= 2:
+            return json.dumps(data, indent=2, default=str)[:max_chars]
+
+        # Show first item, last item, and count
+        first = json.dumps(data[0], default=str)
+        last = json.dumps(data[-1], default=str)
+
+        # Truncate individual items if needed
+        item_budget = (max_chars - 100) // 2
+        if len(first) > item_budget:
+            first = first[:item_budget] + "..."
+        if len(last) > item_budget:
+            last = last[:item_budget] + "..."
+
+        return f"[{count} items]\nFirst: {first}\nLast: {last}"
+
+    def _summarize_dict(self, data: dict, max_chars: int) -> str:
+        """Summarize a dict with key counts and important values."""
+        if not data:
+            return "{}"
+
+        keys = list(data.keys())
+
+        # Priority keys to always show (common in our schemas)
+        priority_keys = [
+            "error_rate", "success_rate", "pass_rate", "avg_latency_ms",
+            "trace_count", "top_errors", "recommendations", "scorer_results"
+        ]
+
+        summary_parts = []
+        chars_used = 0
+
+        # Show priority keys first
+        for key in priority_keys:
+            if key in data and chars_used < max_chars:
+                value = data[key]
+                value_str = json.dumps(value, default=str)
+                if len(value_str) > 100:
+                    value_str = value_str[:97] + "..."
+                line = f"{key}: {value_str}"
+                summary_parts.append(line)
+                chars_used += len(line) + 1
+
+        # Add remaining keys summary
+        remaining = [k for k in keys if k not in priority_keys]
+        if remaining and chars_used < max_chars:
+            summary_parts.append(f"... +{len(remaining)} more keys: {remaining[:5]}")
+
+        return "\n".join(summary_parts)
+
+    def to_selective_context(self, config: "AgentConfig", use_dynamic_budget: bool = True) -> str:
         """Generate context with only relevant keys for a specific agent.
 
         Uses the agent's configuration to determine which workspace keys to include:
@@ -288,13 +580,21 @@ Use read_from_workspace tool to get full content.
         Args:
             config: AgentConfig with required_keys, optional_keys, output_keys,
                    total_token_budget, and key_token_limits
+            use_dynamic_budget: If True, adjust budget based on workspace size
 
         Returns:
             XML-formatted context string with only relevant entries
         """
         parts = ["<workspace_context>"]
         chars_used = 0
-        max_chars = config.total_token_budget * 4  # ~4 chars per token estimate
+
+        # Use dynamic budget if enabled
+        if use_dynamic_budget:
+            budget = self.compute_dynamic_budget(config)
+        else:
+            budget = config.total_token_budget
+
+        max_chars = budget * 4  # ~4 chars per token estimate
 
         missing_required = []
         included_keys = []

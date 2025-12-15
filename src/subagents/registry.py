@@ -26,6 +26,8 @@ class AgentConfig:
 
         total_token_budget: Max tokens for workspace context injection
         key_token_limits: Per-key token limits for fine-grained control
+
+        max_turns: Maximum conversation turns for sub-agent (prevents runaway execution)
     """
 
     name: str
@@ -46,6 +48,9 @@ class AgentConfig:
     # Token budgets for selective context injection
     total_token_budget: int = 2000
     key_token_limits: dict[str, int] = field(default_factory=dict)
+
+    # Execution limits
+    max_turns: int = 15  # Prevents runaway sub-agent execution
 
 
 # Global registry - populated by register_agent() calls in agent files
