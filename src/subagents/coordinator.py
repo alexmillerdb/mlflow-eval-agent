@@ -54,8 +54,8 @@ When you generate evaluation code and the user wants automatic execution:
 write_to_workspace(key="generated_eval_code", data={{
     "code": "import mlflow...",
     "description": "Evaluates retrieval quality",
-    "scorers_used": ["RetrievalGroundedness", "custom_scorer"],
-    "expected_dataset_size": 50
+    "scorers": ["RetrievalGroundedness", "custom_scorer"],
+    "dataset_size": 50
 }})
 ```
 
