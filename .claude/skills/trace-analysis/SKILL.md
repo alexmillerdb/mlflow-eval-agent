@@ -393,7 +393,7 @@ Use MLflow MCP Server tools for interactive trace exploration and analysis.
 ### Search Traces with Field Extraction
 
 ```
-mcp__mlflow-mcp__search_traces(
+mcp__mlflow-eval__search_traces(
     experiment_id="123",
     filter_string="attributes.status = 'OK' AND timestamp_ms > {cutoff_ms}",
     extract_fields="info.trace_id,info.status,info.execution_time_ms,data.spans.*.name,data.spans.*.span_type",
@@ -412,7 +412,7 @@ mcp__mlflow-mcp__search_traces(
 ### Get Trace Details
 
 ```
-mcp__mlflow-mcp__get_trace(
+mcp__mlflow-eval__get_trace(
     trace_id="tr-abc123",
     extract_fields="info.*,data.spans.*"
 )
@@ -422,14 +422,14 @@ mcp__mlflow-mcp__get_trace(
 
 ```
 # Mark trace for inclusion in eval dataset
-mcp__mlflow-mcp__set_trace_tag(
+mcp__mlflow-eval__set_trace_tag(
     trace_id="tr-abc123",
     key="eval_category",
     value="retrieval_error"
 )
 
 # Later search by tag
-mcp__mlflow-mcp__search_traces(
+mcp__mlflow-eval__search_traces(
     filter_string="tags.eval_category = 'retrieval_error'"
 )
 ```
@@ -438,7 +438,7 @@ mcp__mlflow-mcp__search_traces(
 
 ```
 # Store analysis as feedback (persists in MLflow)
-mcp__mlflow-mcp__log_feedback(
+mcp__mlflow-eval__log_feedback(
     trace_id="tr-abc123",
     name="latency_analysis",
     value="high",
@@ -451,7 +451,7 @@ mcp__mlflow-mcp__log_feedback(
 
 ```
 # When you determine what the correct output should be
-mcp__mlflow-mcp__log_expectation(
+mcp__mlflow-eval__log_expectation(
     trace_id="tr-abc123",
     name="correct_response",
     value="The meeting is scheduled for 3pm on Tuesday."
@@ -461,7 +461,7 @@ mcp__mlflow-mcp__log_expectation(
 ### Retrieve Assessments
 
 ```
-mcp__mlflow-mcp__get_assessment(
+mcp__mlflow-eval__get_assessment(
     trace_id="tr-abc123",
     assessment_id="latency_analysis"
 )

@@ -680,20 +680,20 @@ Use the MLflow MCP server for quick trace lookups.
 # Via Claude Code, use MCP server tools:
 
 # Search traces in an experiment
-mcp__mlflow-mcp__search_traces(
+mcp__mlflow-eval__search_traces(
     experiment_id="your_experiment_id",
     max_results=10,
     output="table"
 )
 
 # Get detailed trace info
-mcp__mlflow-mcp__get_trace(
+mcp__mlflow-eval__get_trace(
     trace_id="tr-abc123",
     extract_fields="info.trace_id,info.status,data.spans.*.name"
 )
 
 # Filter by status
-mcp__mlflow-mcp__search_traces(
+mcp__mlflow-eval__search_traces(
     experiment_id="123",
     filter_string="status = 'OK'",
     max_results=20
@@ -807,7 +807,7 @@ Store analysis findings directly in MLflow for later use. Use MCP tools during a
 
 ```
 # Store a finding during agent analysis
-mcp__mlflow-mcp__log_feedback(
+mcp__mlflow-eval__log_feedback(
     trace_id="tr-abc123",
     name="bottleneck_detected",
     value="retriever",
@@ -820,7 +820,7 @@ mcp__mlflow-mcp__log_feedback(
 
 ```
 # When you know what the correct output should be
-mcp__mlflow-mcp__log_expectation(
+mcp__mlflow-eval__log_expectation(
     trace_id="tr-abc123",
     name="expected_output",
     value='{"status": "success", "answer": "The quarterly revenue was $2.3M"}'
@@ -830,7 +830,7 @@ mcp__mlflow-mcp__log_expectation(
 ### Retrieve Assessments (via MCP)
 
 ```
-mcp__mlflow-mcp__get_assessment(
+mcp__mlflow-eval__get_assessment(
     trace_id="tr-abc123",
     assessment_id="bottleneck_detected"
 )
@@ -842,7 +842,7 @@ After tagging traces during analysis, search for them later:
 
 ```
 # Find all traces tagged as evaluation candidates
-mcp__mlflow-mcp__search_traces(
+mcp__mlflow-eval__search_traces(
     experiment_id="123",
     filter_string="tags.eval_candidate = 'error_case'",
     extract_fields="info.trace_id,data.request,data.response"

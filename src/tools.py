@@ -3,6 +3,7 @@
 Includes:
 - Workspace tools for inter-agent communication
 - MLflow tools for trace analysis (replaces external MCP server)
+- Tool result compression for large responses
 """
 
 import json
@@ -19,6 +20,7 @@ from .mlflow_client import (
     format_trace_detail,
     text_result,
 )
+from .tool_compression import compress_tool_result, OutputMode, get_output_mode
 
 logger = logging.getLogger(__name__)
 
@@ -155,26 +157,54 @@ def create_mlflow_tools() -> list:
 
     @tool(
         "get_trace",
-        "Get detailed trace by ID including all spans with token usage, errors, and I/O previews.",
-        {"trace_id": str}
+        "Get detailed trace by ID including all spans with token usage, errors, and I/O. "
+        "Use output_mode='full' for complete data, 'summary' (default) for adaptive truncation, "
+        "or 'preview' for minimal 500-char truncation.",
+        {"trace_id": str, "output_mode": str}
     )
     async def get_trace_tool(args: dict[str, Any]) -> dict[str, Any]:
         """Get detailed trace by ID.
 
-        Returns JSON with:
-        - info: trace_id, status, execution_time_ms, timestamp_ms
-        - assessments: existing feedback/expectations on the trace
-        - spans: list with span_type, duration_ms, tokens (for LLM), errors, I/O previews
+        Returns summary with file reference for large traces (unless output_mode='full').
+        Full data is saved to .claude/cache/tool_results/<trace_id>.json
+        and can be accessed via the Read tool when needed.
+
+        Args:
+            trace_id: The trace ID to fetch
+            output_mode: "preview" (500 chars), "summary" (adaptive, default), or "full" (no limit)
+                         Can also be set via TRACE_OUTPUT_MODE env var.
+
+        Summary includes:
+        - info: trace_id, status, execution_time_ms
+        - span count and error count
+        - LLM calls and token usage
+        - Top bottlenecks
         """
         try:
             client = get_mlflow_client()
             trace_id = args.get("trace_id", "")
+            output_mode_str = args.get("output_mode", "").lower()
 
             if not trace_id:
                 return text_result("[MLflow] Error: trace_id is required")
 
+            # Determine output mode
+            if output_mode_str:
+                try:
+                    mode = OutputMode(output_mode_str)
+                except ValueError:
+                    return text_result(
+                        f"[MLflow] Error: Invalid output_mode '{output_mode_str}'. "
+                        "Use 'preview', 'summary', or 'full'."
+                    )
+            else:
+                mode = get_output_mode()  # From env var or default
+
             trace = client.get_trace(trace_id=trace_id)
-            return text_result(format_trace_detail(trace))
+            result = text_result(format_trace_detail(trace, output_mode=mode.value))
+
+            # Compress large results: write to file, return summary (respects mode)
+            return compress_tool_result("get_trace", result, trace_id=trace_id, mode=mode)
 
         except Exception as e:
             logger.exception(f"Error getting trace {args.get('trace_id')}")

@@ -41,17 +41,19 @@ Evaluation-driven agent for analyzing and optimizing GenAI agents on Databricks.
 
 ## MCP Tools
 
-### MLflow MCP Server (mcp__mlflow-mcp__)
+### In-Process MCP Server (mcp__mlflow-eval__)
 
-- `search_traces` - Find traces with filters and field extraction
-- `get_trace` - Get detailed trace by ID
+All tools are served from a single in-process MCP server:
+
+**MLflow Trace Tools:**
+- `search_traces` - Find traces with filters
+- `get_trace` - Get detailed trace by ID (use `output_mode='aggressive'` for batch operations)
 - `set_trace_tag` / `delete_trace_tag` - Tag traces for dataset building
 - `log_feedback` - Store analysis findings on traces
 - `log_expectation` - Store ground truth for evaluation
 - `get_assessment` / `update_assessment` - Retrieve/modify assessments
 
-### Internal Tools (mcp__mlflow-eval__)
-
+**Workspace Tools:**
 - `write_to_workspace` / `read_from_workspace` - Inter-agent communication
 - `check_workspace_dependencies` - Validate required data exists
 

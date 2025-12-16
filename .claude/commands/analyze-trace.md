@@ -1,75 +1,105 @@
 ---
-description: Analyze MLflow trace using MCP server and/or Python script
+description: Analyze MLflow trace using Python script with MLflow 3 SDK
 argument-hint: "[trace-id]"
 model: claude-sonnet-4-5-20250929
 ---
 
 Analyze trace: **$ARGUMENTS**
 
-## Configuration
-
-This command requires:
-- MLflow MCP server configured (see MCP Server Setup below)
-- Optional: Custom trace analysis script in your project
-
 ## Analysis Strategy
 
-Use MLflow MCP server for comprehensive trace analysis:
+Run the Python analysis script to get comprehensive trace analysis:
 
-### Phase 1: Quick Overview (MLflow MCP)
+```bash
+# Summary analysis (default)
+python scripts/analyze_trace.py $ARGUMENTS
 
-1. Use MCP tool to fetch trace data:
-   - `mcp__mlflow-mcp__get_trace` with trace_id: $ARGUMENTS
+# Include full span data with inputs/outputs for detailed review
+python scripts/analyze_trace.py $ARGUMENTS --full
 
-2. Extract high-level insights:
-   - Trace status and execution time
-   - Number of spans
-   - Key attributes and metadata
+# Raw trace data for direct analysis
+python scripts/analyze_trace.py $ARGUMENTS --raw
+```
 
-### Phase 2: Deep Dive (Span Analysis)
+**Use `--full` when you need to see actual LLM messages, tool inputs/outputs, and span details.**
+**Use `--raw` for complete trace data extraction for custom analysis.**
 
-3. Analyze span hierarchy and timing:
-   - Use `mcp__mlflow-mcp__get_trace` with detailed span extraction
-   - Or run a project-specific analysis script if available:
-     ```bash
-     # Example: python scripts/analyze_trace.py $ARGUMENTS
-     ```
+The script outputs JSON with:
+- Summary (trace_id, status, duration, span count)
+- Architecture detection (DSPy, LangGraph, RAG, Tool-Calling)
+- Latency breakdown by span type
+- Top 5 bottlenecks
+- Error analysis (failed spans, exceptions)
+- Tool call statistics
+- LLM call statistics (including tokens)
+- Recommendations
 
-4. Look for:
-   - Individual span timing and duration
-   - Input/output data at each step
-   - Attribute patterns
-   - Context compression effectiveness (if compression spans present)
+With `--full`, also includes:
+- Full span details with inputs/outputs
+- LLM messages and responses
+- Tool call inputs/outputs
+
+With `--raw`:
+- Complete trace JSON for custom analysis
 
 ## Report Format
 
-Provide a structured markdown report:
+Parse the JSON output and format as markdown:
 
 ```markdown
-# Trace Analysis: $ARGUMENTS
+# Trace Analysis: [trace_id]
 
 ## Summary
-- Status: [OK/ERROR]
-- Execution Time: [X.XX seconds]
-- Total Spans: [N]
+| Field | Value |
+|-------|-------|
+| Status | [OK/ERROR] |
+| Execution Time | [X.XX]ms |
+| Total Spans | [N] |
+| Architecture | [detected architecture] |
 
-## Key Findings
-1. [Finding 1]
-2. [Finding 2]
-...
+## Latency by Span Type
 
-## Performance Insights
-- Token usage efficiency
-- Tool call effectiveness
-- Context compression impact (if applicable)
+| Span Type | Count | Total (ms) | Avg (ms) |
+|-----------|-------|------------|----------|
+| [type] | [n] | [total] | [avg] |
 
-## Optimization Opportunities
-- [Recommendation 1]
-- [Recommendation 2]
+## Bottlenecks
+
+Top 5 slowest components:
+
+| Rank | Component | Type | Duration (ms) |
+|------|-----------|------|---------------|
+| 1 | [name] | [type] | [ms] |
+
+## LLM Usage
+- Total LLM calls: [N]
+- Total latency: [X]ms
+- Input tokens: [N]
+- Output tokens: [N]
+
+## Tool Usage
+- Total tool calls: [N]
+- Unique tools: [N]
+
+## Errors
+[If any failed spans, list them with error messages]
+
+## Recommendations
+[List recommendations from the report]
 
 ## Next Steps
-- [Suggested action 1]
-- [Suggested action 2]
+- [ ] [Action based on recommendations]
+```
+
+## Fallback: MCP Server
+
+If the Python script fails, fall back to MCP tools:
+
+```
+mcp__mlflow-eval__get_trace(
+  trace_id="$ARGUMENTS",
+  extract_fields="info.trace_id,info.status,info.execution_time_ms,data.spans.*.name,data.spans.*.span_type"
+)
 ```
 
 ## Important Notes
@@ -78,20 +108,3 @@ Provide a structured markdown report:
 - Identify patterns (e.g., repeated tool calls, context growth)
 - Relate findings back to agent design principles
 - Suggest specific code or config changes if relevant
-
-## MCP Server Setup
-
-Required MCP configuration in `.claude/settings.local.json` or project settings:
-```json
-{
-  "mcpServers": {
-    "mlflow-mcp": {
-      "command": "uv",
-      "args": ["run", "--with", "mlflow[mcp]>=3.5.1", "mlflow", "mcp", "run"],
-      "env": {
-        "MLFLOW_TRACKING_URI": "databricks"
-      }
-    }
-  }
-}
-```

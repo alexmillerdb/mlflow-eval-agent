@@ -9,23 +9,29 @@ from .registry import AgentConfig, register_agent
 # =============================================================================
 
 MCP_SEARCH_EXAMPLE = """
-mcp__mlflow-mcp__search_traces(
+mcp__mlflow-eval__search_traces(
     experiment_id="...",
     filter_string="attributes.status = 'ERROR' AND timestamp_ms > {{yesterday_ms}}",
-    extract_fields="info.trace_id,info.status,info.execution_time_ms",
     max_results=50
 )
 """
 
 MCP_GET_TRACE_EXAMPLE = """
-mcp__mlflow-mcp__get_trace(
+# For 1-3 traces, use summary mode:
+mcp__mlflow-eval__get_trace(
     trace_id="tr-abc123",
-    extract_fields="info.*,data.spans.*.name,data.spans.*.span_type"
+    output_mode="summary"
+)
+
+# For 4+ traces, use aggressive mode:
+mcp__mlflow-eval__get_trace(
+    trace_id="tr-abc123",
+    output_mode="aggressive"
 )
 """
 
 MCP_LOG_FEEDBACK_EXAMPLE = """
-mcp__mlflow-mcp__log_feedback(
+mcp__mlflow-eval__log_feedback(
     trace_id="tr-abc123",
     name="analysis_finding",
     value="high_latency",
@@ -76,6 +82,29 @@ context_engineer and agent_architect, so be thorough.
 ```
 
 {FILTER_SYNTAX_REFERENCE}
+
+## Analyzing Multiple Traces - Batching Strategy
+
+**For 1-3 traces:** Fetch and analyze each fully with output_mode='summary'
+
+**For 4-10 traces:** Use sampling approach:
+1. Get all trace IDs via search_traces
+2. Fetch first 3 traces in detail (output_mode='aggressive')
+3. Scan remaining traces for patterns (use metadata-only fields)
+4. Aggregate findings across all traces
+
+**For 10+ traces:** Use statistical approach:
+1. search_traces with filters (errors, high latency, etc.)
+2. Sample 5 representative traces (mix of success/failure)
+3. Use output_mode='aggressive' to minimize context usage
+4. Extract patterns from metadata fields for others
+5. Write aggregated patterns to workspace
+
+**CRITICAL Context Management:**
+- After fetching traces, IMMEDIATELY write findings to workspace
+- Do NOT accumulate all traces in memory before writing
+- Use aggressive truncation (output_mode='aggressive') for batch operations
+- Workspace compression: 5 full traces → 1 summary object
 
 ## Write to Shared Workspace
 

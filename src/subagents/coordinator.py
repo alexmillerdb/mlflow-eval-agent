@@ -1,9 +1,38 @@
 """Coordinator prompt generation for MLflow Evaluation Agent."""
 
-from typing import TYPE_CHECKING
+from .registry import AgentConfig
 
-if TYPE_CHECKING:
-    from .registry import AgentConfig
+
+# =============================================================================
+# COORDINATOR CONFIG
+# =============================================================================
+
+COORDINATOR_CONFIG = AgentConfig(
+    name="coordinator",
+    description="Main orchestration agent that coordinates sub-agents and synthesizes findings.",
+    prompt_template="{workspace_context}",  # Coordinator uses its own prompt template below
+
+    # Coordinator doesn't require anything initially, reads from sub-agent outputs
+    required_keys=[],
+    optional_keys=[
+        "trace_analysis_summary",
+        "error_patterns",
+        "performance_metrics",
+        "context_recommendations",
+        "eval_results",
+    ],
+    output_keys=[],  # Coordinator doesn't write to workspace
+
+    # Token budgets for selective context injection
+    total_token_budget=4000,  # ~16K chars for workspace context
+    key_token_limits={
+        "trace_analysis_summary": 1000,
+        "error_patterns": 500,
+        "performance_metrics": 500,
+        "context_recommendations": 1000,
+        "eval_results": 1000,
+    },
+)
 
 
 # =============================================================================
@@ -27,6 +56,34 @@ You orchestrate specialized sub-agents to provide comprehensive analysis:
 
 ## Workflow Order
 {workflow_order}
+
+## CRITICAL: Delegation Rules
+
+**ALWAYS delegate trace analysis to sub-agents:**
+- ❌ DON'T: Call get_trace multiple times yourself
+- ✅ DO: Invoke trace_analyst for batch analysis
+- ❌ DON'T: Accumulate full trace data in your context
+- ✅ DO: Read compressed findings from workspace
+- ❌ NEVER use output_mode='full' when analyzing multiple traces
+- ✅ ALWAYS use output_mode='aggressive' or 'summary'
+
+**When user asks to "analyze N traces":**
+1. Invoke trace_analyst with the query
+2. Wait for workspace to populate (trace_analyst will write findings)
+3. Read trace_analysis_summary from workspace
+4. Synthesize findings (DO NOT re-fetch traces)
+
+**When sub-agent fails or reports issues:**
+1. ❌ DO NOT fall back to fetching full traces yourself
+2. ❌ DO NOT compensate by doing the sub-agent's job with full data
+3. ✅ Report the sub-agent error to the user
+4. ✅ Ask user to check sub-agent configuration or retry
+
+**Context Budget Awareness:**
+- Each full trace can be 10K+ tokens
+- Analyzing 5+ traces requires sub-agent delegation
+- Sub-agents compress findings → workspace → you read summaries
+- NEVER fetch traces with output_mode='full' unless analyzing a single trace
 
 ## Workflow Patterns
 
@@ -62,6 +119,18 @@ write_to_workspace(key="generated_eval_code", data={{
 ## Shared Workspace
 Sub-agents write findings to a shared workspace:
 {workspace_context}
+
+## Available Skills
+
+**IMPORTANT**: Before generating code, invoke the relevant skill to load correct API patterns.
+
+| Skill | Invoke With | Use When |
+|-------|-------------|----------|
+| mlflow-evaluation | `Skill(skill="mlflow-evaluation")` | Generating evaluation code, creating scorers, building datasets |
+| trace-analysis | `Skill(skill="trace-analysis")` | Deep trace analysis, profiling latency, debugging failures |
+| context-engineering | `Skill(skill="context-engineering")` | Context optimization, prompt engineering, token budgets |
+
+Skills contain working examples and common gotchas. Always invoke `mlflow-evaluation` before writing evaluation code.
 
 ## Output Requirements
 When generating evaluation code:

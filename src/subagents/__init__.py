@@ -14,8 +14,8 @@ from . import context_engineer
 from . import agent_architect
 from . import eval_runner
 
-# Import coordinator prompt generator
-from .coordinator import get_coordinator_system_prompt
+# Import coordinator prompt generator and config
+from .coordinator import get_coordinator_system_prompt, COORDINATOR_CONFIG
 
 # Re-export individual configs for direct access
 from .trace_analyst import TRACE_ANALYST_CONFIG
@@ -100,6 +100,10 @@ def get_coordinator_prompt(workspace: SharedWorkspace, experiment_id: str = "") 
     Generates the coordinator prompt dynamically from the registry,
     ensuring it stays in sync with registered agents.
 
+    Uses selective context injection based on COORDINATOR_CONFIG to
+    prevent context bloat - only includes relevant workspace keys with
+    token limits applied.
+
     Args:
         workspace: SharedWorkspace instance for context injection
         experiment_id: MLflow experiment ID (numeric string)
@@ -107,7 +111,10 @@ def get_coordinator_prompt(workspace: SharedWorkspace, experiment_id: str = "") 
     Returns:
         Complete coordinator system prompt
     """
-    workspace_context = workspace.to_context_string() or "Empty - no analysis run yet."
+    # Use selective context based on COORDINATOR_CONFIG for efficient context management
+    workspace_context = workspace.to_selective_context(COORDINATOR_CONFIG)
+    if not workspace_context.strip() or workspace_context == "<workspace_context>\n</workspace_context>":
+        workspace_context = "Empty - no analysis run yet."
     return get_coordinator_system_prompt(workspace_context, experiment_id=experiment_id)
 
 
@@ -123,6 +130,7 @@ __all__ = [
     "get_workflow_order",
     "list_agents",
     # Individual configs
+    "COORDINATOR_CONFIG",
     "TRACE_ANALYST_CONFIG",
     "CONTEXT_ENGINEER_CONFIG",
     "AGENT_ARCHITECT_CONFIG",

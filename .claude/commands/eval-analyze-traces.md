@@ -15,126 +15,116 @@ Analyze multiple traces to identify patterns, bottlenecks, and quality issues ac
 The argument can be:
 1. **Experiment ID**: A numeric ID like `3542653191523636`
 2. **Comma-separated trace IDs**: Like `tr-abc123,tr-def456,tr-ghi789`
-3. **Experiment name**: Like `/Users/user@domain.com/my-experiment`
 
-## Analysis Steps
+## Analysis Strategy
 
-### Step 1: Fetch Traces
+Run the Python batch analysis script:
 
-**If argument looks like experiment ID (numeric) or path:**
-```
-mcp__mlflow-mcp__search_traces(
-  experiment_id="$ARGUMENTS",
-  max_results=5,
-  output="json"
-)
+```bash
+python scripts/analyze_traces_batch.py $ARGUMENTS
 ```
 
-**If argument contains comma (trace IDs):**
-For each trace ID, fetch:
-```
-mcp__mlflow-mcp__get_trace(
-  trace_id="<trace_id>",
-  extract_fields="info.trace_id,info.status,info.execution_time_ms,data.spans.*.name,data.spans.*.span_type"
-)
-```
-
-### Step 2: Architecture Detection
-
-Detect agent architecture by analyzing span patterns:
-
-| Architecture | Indicators |
-|-------------|------------|
-| DSPy Multi-Agent | Spans named: classifier, rewriter, gatherer, executor |
-| LangGraph | Spans named: graph, node, state, langgraph |
-| RAG | RETRIEVER span type present |
-| Tool-Calling | TOOL span type present |
-| Simple Chat | Only LLM/CHAT_MODEL spans |
-
-### Step 3: Latency Analysis
-
-Calculate:
-- Total execution time (avg, p50, p95, max)
-- Latency by span type (LLM, TOOL, RETRIEVER, etc.)
-- Latency by component/stage name
-- Identify bottlenecks (spans taking >50% of total time)
-
-### Step 4: Error Analysis
-
-Identify:
-- Failed traces (status != OK)
-- Failed spans within traces
-- Common error patterns
-- Retry patterns
-
-### Step 5: Tool/LLM Usage Patterns
-
-Analyze:
-- Tool call frequency and distribution
-- LLM call count per trace
-- Token usage (if available in attributes)
-- Tool success/failure rates
+The script outputs JSON with:
+- Summary (trace count, success rate, architecture distribution)
+- Latency statistics (avg, min, max, p50, p95)
+- Span type aggregation (counts and latencies)
+- LLM usage (total calls, tokens)
+- Tool usage (total calls, avg per trace)
+- Error patterns (failed traces, common failed spans)
+- Common bottlenecks across traces
+- Recommendations
 
 ## Report Format
+
+Parse the JSON output and format as markdown:
 
 ```markdown
 # Trace Analysis Report
 
 ## Summary
-- **Traces Analyzed**: N
-- **Time Range**: [start] to [end]
-- **Architecture Detected**: [architecture type]
-- **Success Rate**: X%
+| Field | Value |
+|-------|-------|
+| Traces Analyzed | [N] |
+| Success Rate | [X]% |
+| Architectures | [distribution] |
 
 ## Latency Analysis
 
 | Metric | Value |
 |--------|-------|
-| Avg Total | X.XXs |
-| P50 | X.XXs |
-| P95 | X.XXs |
-| Max | X.XXs |
+| Average | [X.XX]ms |
+| P50 | [X.XX]ms |
+| P95 | [X.XX]ms |
+| Min | [X.XX]ms |
+| Max | [X.XX]ms |
 
-### Latency by Component
-| Component | Avg (ms) | % of Total |
-|-----------|----------|------------|
-| [component1] | XXX | XX% |
-| [component2] | XXX | XX% |
-| ... | ... | ... |
+## Span Types
 
-### Bottleneck
-**[Component name]** accounts for XX% of total latency.
-
-## Tool Usage
-- Total tool calls: N
-- Unique tools: N
-- Most used: [tool name] (X calls)
-- Tool success rate: X%
+| Type | Count | Total Latency (ms) |
+|------|-------|-------------------|
+| [type] | [n] | [ms] |
 
 ## LLM Usage
-- Total LLM calls: N avg per trace
-- Estimated tokens: X input / Y output per trace
+- Total LLM calls: [N]
+- Avg calls per trace: [X]
+- Total input tokens: [N]
+- Total output tokens: [N]
+
+## Tool Usage
+- Total tool calls: [N]
+- Avg calls per trace: [X]
+
+## Common Bottlenecks
+
+| Component | Occurrences | Avg Duration (ms) |
+|-----------|-------------|-------------------|
+| [name] | [n] | [ms] |
 
 ## Error Patterns
-[If errors exist, list common patterns]
+- Failed traces: [N]
+- Common failed spans: [list]
 
 ## Recommendations
+[List recommendations from the report]
 
-1. **[Category]**: [Specific recommendation]
-2. **[Category]**: [Specific recommendation]
-...
+## Individual Traces
+
+| Trace ID | Status | Duration (ms) | Architecture |
+|----------|--------|---------------|--------------|
+| [id] | [status] | [ms] | [arch] |
 
 ## Next Steps
-- [ ] [Action item 1]
-- [ ] [Action item 2]
+- [ ] Use `/analyze-trace [trace-id]` for deep dive on specific traces
+- [ ] Use `/optimize-context` for prompt optimization based on findings
+```
+
+## Fallback: MCP Server
+
+If the Python script fails, fall back to MCP tools:
+
+**For experiment ID:**
+```
+mcp__mlflow-eval__search_traces(
+  experiment_id="$ARGUMENTS",
+  max_results=10,
+  output="json"
+)
+```
+
+**For trace IDs:**
+For each trace ID, fetch:
+```
+mcp__mlflow-eval__get_trace(
+  trace_id="<trace_id>",
+  extract_fields="info.trace_id,info.status,info.execution_time_ms,data.spans.*.name,data.spans.*.span_type"
+)
 ```
 
 ## Example Usage
 
 ```
 /eval-analyze-traces 3542653191523636
-/eval-analyze-traces tr-abc123,tr-def456
-/eval-analyze-traces /Users/<your-username>/my-experiment
+/eval-analyze-traces tr-abc123,tr-def456,tr-ghi789
 ```
 
 ## Integration with Other Commands
@@ -143,20 +133,3 @@ After running this analysis:
 - Use `/analyze-trace [trace-id]` for deep dive on specific traces
 - Use `/optimize-context` for prompt optimization based on findings
 - Run evaluation with the same experiment to track improvements
-
-## MCP Server Setup
-
-Required MCP configuration in `.claude/settings.local.json` or project settings:
-```json
-{
-  "mcpServers": {
-    "mlflow-mcp": {
-      "command": "uv",
-      "args": ["run", "--with", "mlflow[mcp]>=3.5.1", "mlflow", "mcp", "run"],
-      "env": {
-        "MLFLOW_TRACKING_URI": "databricks"
-      }
-    }
-  }
-}
-```

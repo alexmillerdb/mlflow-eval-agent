@@ -336,7 +336,7 @@ Use MLflow MCP Server tools to verify context issues during analysis.
 Get token usage from specific traces to understand context consumption:
 
 ```
-mcp__mlflow-mcp__get_trace(
+mcp__mlflow-eval__get_trace(
     trace_id="tr-abc123",
     extract_fields="data.spans.*.attributes.mlflow.chat_model.input_tokens,data.spans.*.attributes.mlflow.chat_model.output_tokens"
 )
@@ -347,7 +347,7 @@ mcp__mlflow-mcp__get_trace(
 Store context-related findings directly on traces (persists in MLflow):
 
 ```
-mcp__mlflow-mcp__log_feedback(
+mcp__mlflow-eval__log_feedback(
     trace_id="tr-abc123",
     name="context_rot_detected",
     value="severe",
@@ -361,7 +361,7 @@ mcp__mlflow-mcp__log_feedback(
 When you identify the correct behavior for a problem trace:
 
 ```
-mcp__mlflow-mcp__log_expectation(
+mcp__mlflow-eval__log_expectation(
     trace_id="tr-abc123",
     name="expected_format",
     value="Should return JSON with 'answer' and 'sources' keys"
@@ -375,7 +375,7 @@ This creates ground truth that can later be used for evaluation datasets.
 Find traces with high token usage or long latency:
 
 ```
-mcp__mlflow-mcp__search_traces(
+mcp__mlflow-eval__search_traces(
     experiment_id="123",
     filter_string="attributes.execution_time_ms > 10000",
     extract_fields="info.trace_id,info.execution_time_ms,data.spans.*.attributes.mlflow.chat_model.input_tokens"

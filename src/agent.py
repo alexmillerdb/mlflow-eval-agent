@@ -19,9 +19,13 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     AssistantMessage,
     TextBlock,
+    ThinkingBlock,
     ToolUseBlock,
     ToolResultBlock,
     ResultMessage,
+    SystemMessage,
+    HookMatcher,
+    HookContext,
     create_sdk_mcp_server,
 )
 
@@ -29,9 +33,23 @@ from .config import EvalAgentConfig
 from .workspace import SharedWorkspace
 from .tools import create_tools, MCPTools, InternalTools, BuiltinTools
 from .subagents import create_subagents, get_coordinator_prompt
+from .tool_compression import cleanup_cache, get_cache_stats
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# Hook callback for observability
+async def _log_tool_use(
+    input_data: dict,
+    tool_use_id: str | None,
+    context: HookContext
+) -> dict:
+    """Log tool usage for observability, especially MLflow operations."""
+    tool_name = input_data.get('tool_name', 'unknown')
+    if tool_name.startswith('mcp__mlflow'):
+        logger.info(f"MLflow operation completed: {tool_name}")
+    return {}
 
 
 @dataclass
@@ -44,8 +62,8 @@ class EvalAgentResult:
     session_id: Optional[str] = None
     timing_metrics: Optional[dict] = None
 
-    # Event type
-    event_type: str = "text"  # text | tool_use | tool_result | todo_update | subagent | result
+    # Event type: text | thinking | tool_use | tool_result | todo_update | subagent | system | result
+    event_type: str = "text"
 
     # Tool call fields
     tool_name: Optional[str] = None
@@ -61,6 +79,23 @@ class EvalAgentResult:
 
     # Subagent fields
     subagent_name: Optional[str] = None
+
+    # ThinkingBlock fields (Opus 4.5 reasoning)
+    thinking_content: Optional[str] = None
+    thinking_signature: Optional[str] = None
+
+    # SystemMessage fields
+    system_subtype: Optional[str] = None
+    system_data: Optional[dict] = None
+
+    # ResultMessage usage fields
+    usage_data: Optional[dict] = None
+    num_turns: Optional[int] = None
+    duration_ms: Optional[int] = None
+    duration_api_ms: Optional[int] = None
+
+    # Context usage monitoring
+    context_warning: Optional[str] = None
 
 
 class MLflowEvalAgent:
@@ -94,6 +129,11 @@ class MLflowEvalAgent:
         self._client: Optional[ClaudeSDKClient] = None
         self._start_time: Optional[float] = None
         self._last_session_id: Optional[str] = None
+
+        # Clean up old cached tool results on initialization
+        removed = cleanup_cache(max_age_hours=24)
+        if removed > 0:
+            logger.info(f"Cleaned up {removed} old tool result cache files")
 
     @property
     def session_id(self) -> Optional[str]:
@@ -168,6 +208,9 @@ class MLflowEvalAgent:
                 MCPTools.LOG_FEEDBACK, MCPTools.LOG_EXPECTATION,
                 MCPTools.GET_ASSESSMENT, MCPTools.UPDATE_ASSESSMENT,
             ],
+            hooks={
+                'PostToolUse': [HookMatcher(hooks=[_log_tool_use])]
+            },
             setting_sources=["project"],
             cwd=str(self.config.working_dir),
             permission_mode="bypassPermissions",
@@ -197,6 +240,14 @@ class MLflowEvalAgent:
                             response_text += block.text
                             yield EvalAgentResult(success=True, response=response_text, event_type="text")
 
+                        elif isinstance(block, ThinkingBlock):
+                            # Stream thinking content for Opus 4.5 reasoning visibility
+                            yield EvalAgentResult(
+                                success=True, response=response_text, event_type="thinking",
+                                thinking_content=block.thinking,
+                                thinking_signature=block.signature,
+                            )
+
                         elif isinstance(block, ToolUseBlock):
                             if block.name == "Task":
                                 yield EvalAgentResult(
@@ -224,6 +275,14 @@ class MLflowEvalAgent:
                                 tool_is_error=block.is_error,
                             )
 
+                elif isinstance(message, SystemMessage):
+                    # Yield system metadata events
+                    yield EvalAgentResult(
+                        success=True, response=response_text, event_type="system",
+                        system_subtype=message.subtype,
+                        system_data=message.data,
+                    )
+
                 elif isinstance(message, ResultMessage):
                     timing = self.workspace.get_timing_metrics()
                     timing["total_query_time"] = time.time() - self._start_time
@@ -231,10 +290,23 @@ class MLflowEvalAgent:
                     # Store session_id for follow-up queries
                     self._last_session_id = message.session_id
 
+                    # Check for high context usage (Opus 4.5 has 200K token limit)
+                    context_warning = None
+                    if message.usage:
+                        input_tokens = message.usage.get('input_tokens', 0)
+                        if input_tokens > 150000:  # 75% of 200K limit
+                            context_warning = f"Context usage high: {input_tokens:,} tokens (75% of limit)"
+                            logger.warning(context_warning)
+
                     yield EvalAgentResult(
                         success=not message.is_error, response=response_text, event_type="result",
                         cost_usd=message.total_cost_usd, session_id=message.session_id,
                         timing_metrics=timing,
+                        usage_data=message.usage,
+                        num_turns=message.num_turns,
+                        duration_ms=message.duration_ms,
+                        duration_api_ms=message.duration_api_ms,
+                        context_warning=context_warning,
                     )
 
     async def analyze_and_generate(
