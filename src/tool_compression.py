@@ -49,6 +49,9 @@ CACHE_DIR = Path(".claude/cache/tool_results")
 # Threshold for storing in file vs returning inline
 LARGE_RESULT_THRESHOLD = 2000  # chars
 
+# Claude Agent SDK has 1MB JSON buffer limit - stay safely under
+MAX_INLINE_SIZE = 800_000  # bytes (leave headroom for JSON encoding)
+
 
 def compress_tool_result(
     tool_name: str,
@@ -93,8 +96,25 @@ def compress_tool_result(
     except (KeyError, IndexError, TypeError):
         text_content = str(result)
 
-    # FULL mode: return complete result (still cache for reference)
+    # FULL mode: return complete result IF it fits, otherwise compress
     if mode == OutputMode.FULL:
+        content_size = len(text_content.encode('utf-8'))
+        if content_size > MAX_INLINE_SIZE:
+            # Exceeds SDK limit - must compress regardless of mode
+            file_path = _write_to_cache(tool_name, text_content, trace_id)
+            logger.warning(
+                f"FULL mode requested but result ({content_size:,} bytes) exceeds "
+                f"SDK limit ({MAX_INLINE_SIZE:,} bytes). Returning file reference."
+            )
+            # Use AGGRESSIVE limits for summary since we're forced to compress
+            adaptive_limit = _get_adaptive_limit(tool_name, text_content, OutputMode.AGGRESSIVE)
+            summary = _summarize_tool_result(tool_name, text_content, adaptive_limit)
+            return text_result(
+                f"{summary}\n\n"
+                f"[Full data ({content_size:,} bytes) saved to: {file_path}]\n"
+                f"Use the Read tool to access full trace data."
+            )
+        # Small enough - return complete result
         if len(text_content) > LARGE_RESULT_THRESHOLD:
             file_path = _write_to_cache(tool_name, text_content, trace_id)
             logger.info(f"FULL mode: Returning complete result ({len(text_content):,} chars, cached to {file_path})")
