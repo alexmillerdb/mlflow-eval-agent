@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "claude-agent-sdk",
-    "mlflow[genai]>=3.5.1",
+    "mlflow[databricks]>=3.5.1",
     "python-dotenv>=1.0.0",
     "databricks-connect",
     "anthropic"
