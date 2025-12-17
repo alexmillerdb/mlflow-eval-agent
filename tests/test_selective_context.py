@@ -228,7 +228,8 @@ class TestMissingDependencies:
         assert can_run is False
         assert "trace_analysis_summary" in missing
         assert "error_patterns" in missing
-        assert "Run trace_analyst first" in msg
+        # Base message identifies missing entries (suggestion is added by validate_agent_can_run)
+        assert "missing required workspace entries" in msg
 
     def test_check_agent_dependencies_passes_when_satisfied(self, populated_workspace):
         """check_agent_dependencies should pass when all keys present."""
