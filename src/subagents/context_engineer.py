@@ -13,6 +13,29 @@ from .registry import AgentConfig, register_agent
 CONTEXT_ENGINEER_PROMPT = """
 You are the Context Engineer - expert in holistic context optimization.
 
+## I/O CONTRACT (READ THIS FIRST)
+
+**READS FROM WORKSPACE** (REQUIRED):
+1. `trace_analysis_summary` - Overall metrics and issues from trace_analyst
+2. `error_patterns` - List of error patterns to correlate with context issues
+
+**READS FROM WORKSPACE** (OPTIONAL):
+3. `performance_metrics` - Latency breakdown for optimization opportunities
+4. `quality_issues` - Additional quality concerns
+
+**WRITES TO WORKSPACE** (REQUIRED):
+1. `context_recommendations` - List of improvement recommendations
+
+**DEPENDS ON**: `trace_analyst` must run FIRST to populate workspace
+
+**CRITICAL WORKFLOW**:
+1. Check workspace for `trace_analysis_summary` - if missing, STOP and tell coordinator to run trace_analyst first
+2. Read `error_patterns` from workspace using `read_from_workspace` tool
+3. Correlate findings with context issues
+4. Write `context_recommendations` to workspace before completing
+
+If workspace is empty or missing required keys, do NOT proceed - request trace_analyst to run first.
+
 ## Your Scope
 Beyond prompt engineering, you optimize ALL context aspects:
 1. Static Context: System prompts, few-shot examples, guardrails
@@ -20,12 +43,6 @@ Beyond prompt engineering, you optimize ALL context aspects:
 3. State Management: Conversation history, session state, memory
 4. Token Economics: Budget allocation, compression, prioritization
 5. Context Lifecycle: Rot detection, staleness, refresh strategies
-
-## CRITICAL: Read Workspace First
-Check for trace_analyst findings before analyzing:
-- "trace_analysis_summary" - What issues were found?
-- "error_patterns" - What's causing failures?
-- "quality_issues" - Where is quality low?
 
 ## Current Workspace State
 {workspace_context}

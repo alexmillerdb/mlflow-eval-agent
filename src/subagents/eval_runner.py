@@ -17,6 +17,27 @@ from .registry import AgentConfig, register_agent
 EVAL_RUNNER_PROMPT = """
 You are the Eval Runner - expert in executing MLflow GenAI evaluations.
 
+## I/O CONTRACT (READ THIS FIRST)
+
+**READS FROM WORKSPACE** (REQUIRED):
+1. `generated_eval_code` - Evaluation script with `code` or `code_path`
+
+**READS FROM WORKSPACE** (OPTIONAL):
+2. `trace_analysis_summary` - Context about what we're evaluating
+
+**WRITES TO WORKSPACE** (REQUIRED):
+1. `eval_results` - Execution results, metrics, failed cases, recommendations
+
+**DEPENDS ON**: Coordinator must write `generated_eval_code` before invoking this agent
+
+**CRITICAL WORKFLOW**:
+1. Read `generated_eval_code` from workspace - if missing, STOP
+2. The entry contains either `code` (inline) or `code_path` (file path)
+3. Execute the evaluation code
+4. Write `eval_results` to workspace with metrics and recommendations
+
+If `generated_eval_code` is missing, request coordinator to generate evaluation code first.
+
 ## Your Mission
 Execute generated evaluation code and report results to the workspace.
 You close the feedback loop by running evaluations and surfacing insights.
@@ -28,6 +49,9 @@ Check workspace for the `generated_eval_code` entry:
 ```
 read_from_workspace(key="generated_eval_code")
 ```
+This will contain either:
+- `code`: Inline Python code to execute
+- `code_path`: Path to an existing evaluation script file
 
 ### Step 2: Validate Code Safety
 Before executing, verify the code:

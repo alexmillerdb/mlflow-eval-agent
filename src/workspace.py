@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Union, TYPE_CHECKING
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 if TYPE_CHECKING:
     from .subagents.registry import AgentConfig
@@ -117,13 +117,32 @@ class EvalResults(BaseModel):
 
 
 class GeneratedEvalCode(BaseModel):
-    """Schema for generated_eval_code workspace entry."""
-    code: str = Field(..., description="Python code for evaluation")
+    """Schema for generated_eval_code workspace entry.
+
+    Either 'code' (inline Python code) or 'code_path' (path to file) must be provided.
+    This allows flexibility for both inline code generation and file-based patterns.
+    """
+    code: Optional[str] = Field(None, description="Python code for evaluation (inline)")
+    code_path: Optional[str] = Field(None, description="Path where code was written")
     scorers: list[str] = Field(default_factory=list, description="Scorers used in evaluation")
     dataset_size: Optional[int] = Field(None, description="Number of test cases")
-    file_path: Optional[str] = Field(None, description="Path where code was written")
+    description: Optional[str] = Field(None, description="What this evaluation tests")
+    # Keep file_path as alias for backward compatibility
+    file_path: Optional[str] = Field(None, description="Alias for code_path (deprecated)")
 
     model_config = {"extra": "allow"}
+
+    @model_validator(mode='after')
+    def validate_code_or_path(self) -> 'GeneratedEvalCode':
+        """Ensure either code or code_path is provided."""
+        # Support file_path as alias for code_path
+        effective_path = self.code_path or self.file_path
+        if not self.code and not effective_path:
+            raise ValueError(
+                "Must provide either 'code' (inline Python) or 'code_path' (path to file). "
+                "Got neither."
+            )
+        return self
 
 
 # Registry mapping workspace keys to Pydantic models
@@ -212,6 +231,37 @@ def get_schema_json(key: str) -> Optional[dict]:
         }
 
     return schema.model_json_schema()
+
+
+def get_schema_hint(key: str) -> str:
+    """Get a human-readable schema hint for error messages.
+
+    Returns a formatted string showing required and optional fields
+    to help users fix validation errors.
+    """
+    schema = WORKSPACE_SCHEMAS.get(key)
+    if schema is None:
+        if key in LIST_KEYS:
+            return f"Expected: list of objects for '{key}'"
+        return f"Expected: dict for '{key}'"
+
+    # Get model fields info
+    fields_info = []
+    for field_name, field_info in schema.model_fields.items():
+        is_required = field_info.is_required()
+        field_type = str(field_info.annotation).replace("typing.", "")
+        marker = "REQUIRED" if is_required else "optional"
+        desc = field_info.description or ""
+        fields_info.append(f"  - {field_name}: {field_type} ({marker}) {desc}")
+
+    hint_lines = [f"Schema for '{key}':"]
+    if key in LIST_KEYS:
+        hint_lines.append("Expected: list of objects, each with:")
+    else:
+        hint_lines.append("Expected: object with:")
+    hint_lines.extend(fields_info)
+
+    return "\n".join(hint_lines)
 
 
 # =============================================================================
@@ -348,11 +398,16 @@ class SharedWorkspace:
 
         Data can be a dict/list or a JSON string. JSON strings will be parsed
         and validated against the schema for the key.
+
+        On validation failure, returns helpful error message with schema hint.
         """
         is_valid, parsed_data, msg = validate_workspace_entry(key, data)
         if not is_valid:
-            logger.warning(f"Workspace validation failed: {msg}")
-            return False, msg
+            # Include schema hint to help fix validation errors
+            schema_hint = get_schema_hint(key)
+            enhanced_msg = f"[Workspace] Validation error: {msg}\n\n{schema_hint}"
+            logger.warning(f"Workspace validation failed for '{key}': {msg}")
+            return False, enhanced_msg
 
         # Store the validated/parsed data
         self._data[key] = {
@@ -725,11 +780,8 @@ Use read_from_workspace tool if needed.
         if not missing:
             return True, [], f"All dependencies satisfied for {config.name}"
 
-        # Determine which agent produces the missing keys
-        # This is a hint - in practice you'd look this up from the registry
+        # Return just the base message - the caller (validate_agent_can_run in __init__.py)
+        # will add suggestions about which agent to run first using _get_dependency_producers
         message = f"Cannot run {config.name}: missing required workspace entries {missing}."
-
-        if "trace_analysis_summary" in missing or "error_patterns" in missing:
-            message += " Run trace_analyst first."
 
         return False, missing, message

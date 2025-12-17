@@ -66,9 +66,30 @@ def create_subagents(
     return agents
 
 
+def _get_dependency_producers(missing_keys: list[str]) -> list[str]:
+    """Map missing workspace keys to the agents that produce them.
+
+    Uses AGENT_REGISTRY to find which agents have the missing keys
+    in their output_keys.
+
+    Args:
+        missing_keys: List of missing workspace keys
+
+    Returns:
+        List of agent names that produce the missing keys
+    """
+    producers = set()
+    for name, config in AGENT_REGISTRY.items():
+        for key in missing_keys:
+            if key in config.output_keys:
+                producers.add(name)
+    return sorted(producers)
+
+
 def validate_agent_can_run(
     agent_name: str,
-    workspace: SharedWorkspace
+    workspace: SharedWorkspace,
+    strict: bool = True
 ) -> tuple[bool, list[str], str]:
     """Check if an agent has all required dependencies to run.
 
@@ -78,6 +99,8 @@ def validate_agent_can_run(
     Args:
         agent_name: Name of the agent to validate
         workspace: SharedWorkspace instance to check
+        strict: If True (default), return False when dependencies missing.
+                If False, warn but allow execution (legacy behavior).
 
     Returns:
         Tuple of (can_run, missing_keys, message)
@@ -91,7 +114,29 @@ def validate_agent_can_run(
     if not config:
         return False, [], f"Unknown agent: {agent_name}"
 
-    return workspace.check_agent_dependencies(config)
+    can_run, missing, base_msg = workspace.check_agent_dependencies(config)
+
+    if not can_run:
+        # Find which agents produce the missing keys
+        producers = _get_dependency_producers(missing)
+        if producers:
+            suggestion = f" Run {', '.join(producers)} first to populate these keys."
+        else:
+            suggestion = " These keys may need to be written by a previous workflow step."
+
+        enhanced_msg = f"{base_msg}{suggestion}"
+
+        if strict:
+            return False, missing, enhanced_msg
+        else:
+            # Legacy behavior: warn but allow
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Dependencies missing for {agent_name}, proceeding anyway: {enhanced_msg}"
+            )
+            return True, missing, f"WARNING: {enhanced_msg}"
+
+    return True, [], base_msg
 
 
 def get_coordinator_prompt(workspace: SharedWorkspace, experiment_id: str = "") -> str:
