@@ -10,9 +10,7 @@ Evaluation-driven agent for analyzing and optimizing GenAI agents on Databricks.
 
 | Skill | Location | Use When |
 |-------|----------|----------|
-| **mlflow-evaluation** | `.claude/skills/mlflow-evaluation/` | Generating evaluation code, creating scorers, building datasets |
-| **trace-analysis** | `.claude/skills/trace-analysis/` | Analyzing traces, profiling latency, debugging failures |
-| **context-engineering** | `.claude/skills/context-engineering/` | Optimizing prompts, RAG context, state management, token budgets |
+| **mlflow-evaluation** | `.claude/skills/mlflow-evaluation/` | Generating evaluation code, creating scorers, building datasets, analyzing traces, profiling latency, debugging failures, optimizing prompts/context/token budgets |
 
 ### Key Gotchas (from mlflow-evaluation skill)
 
