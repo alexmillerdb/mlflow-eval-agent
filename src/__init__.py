@@ -1,12 +1,16 @@
-"""MLflow Evaluation Agent package."""
+"""MLflow Evaluation Agent package.
 
-from .agent import MLflowEvalAgent, EvalAgentResult
-from .config import EvalAgentConfig
-from .workspace import SharedWorkspace
+Simplified architecture following Anthropic best practices:
+- Single agent with 3 tools (vs coordinator + 4 sub-agents + 11 tools)
+- File-based state (vs 787-line workspace.py)
+- External prompts (vs hardcoded)
+"""
+
+from .agent import MLflowAgent, AgentResult
+from .config import Config
 
 __all__ = [
-    "MLflowEvalAgent",
-    "EvalAgentResult",
-    "EvalAgentConfig",
-    "SharedWorkspace",
+    "MLflowAgent",
+    "AgentResult",
+    "Config",
 ]
