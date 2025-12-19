@@ -1,298 +1,297 @@
-"""Custom scorers for evaluating the mlflow-eval-agent framework.
+"""
+Scorers for Multi-Genie Orchestrator agent evaluation.
 
-Scorers:
-- agent_routing_accuracy: Check if correct agent was invoked
-- execution_order_scorer: Verify agents executed in dependency order
-- tool_selection_accuracy: Check if correct tools were called
+Includes:
+- Built-in scorers: Safety, RelevanceToQuery
+- Custom Guidelines scorers: correct_routing, efficient_routing, data_presentation, summary_quality
+- Trace-based scorers: genie_routing_efficiency, latency_analysis
+
+Note: Correctness and RetrievalGroundedness are NOT applicable:
+- Correctness: Would require ground truth expected_facts for each query
+- RetrievalGroundedness: Agent has no RETRIEVER spans (routing agent, not RAG)
 """
 
-from typing import Any
-
-from mlflow.entities import Feedback, Trace, SpanType
-from mlflow.genai.scorers import scorer
+from mlflow.genai.scorers import Guidelines, Safety, RelevanceToQuery, scorer
+from mlflow.entities import Feedback, Trace
 
 
-@scorer
-def agent_routing_accuracy(
-    inputs: dict[str, Any],
-    outputs: dict[str, Any],
-    expectations: dict[str, Any],
-    trace: Trace,
-) -> Feedback:
-    """Check if the correct agent was invoked based on trace spans.
+# =============================================================================
+# Built-in Scorers
+# =============================================================================
 
-    Looks for agent spans in the trace and compares to expected_agent
-    in the expectations.
+# Safety scorer - ensures no harmful content in responses
+safety_scorer = Safety()
 
-    Args:
-        inputs: The input data (query, etc.)
-        outputs: The agent outputs
-        expectations: Must contain 'expected_agent' key
-        trace: MLflow Trace object
-
-    Returns:
-        Feedback with yes/no value and rationale
-    """
-    expected_agent = expectations.get("expected_agent")
-
-    if expected_agent is None:
-        return Feedback(
-            name="agent_routing_accuracy",
-            value="skip",
-            rationale="No expected_agent in expectations",
-        )
-
-    # Search for agent spans in the trace
-    # Agents are typically represented as spans with the agent name
-    all_spans = trace.search_spans() if trace else []
-
-    # Known agent names from the registry
-    known_agents = ["trace_analyst", "context_engineer", "agent_architect", "eval_runner"]
-
-    # Find which agents were invoked
-    invoked_agents = []
-    for span in all_spans:
-        span_name_lower = span.name.lower() if hasattr(span, "name") else ""
-        for agent in known_agents:
-            if agent in span_name_lower:
-                invoked_agents.append(agent)
-                break
-
-    # Check if expected agent was invoked
-    expected_invoked = expected_agent in invoked_agents
-
-    if expected_invoked:
-        return Feedback(
-            name="agent_routing_accuracy",
-            value="yes",
-            rationale=f"Expected agent '{expected_agent}' was correctly invoked. "
-            f"All invoked agents: {invoked_agents}",
-        )
-    else:
-        return Feedback(
-            name="agent_routing_accuracy",
-            value="no",
-            rationale=f"Expected agent '{expected_agent}' was NOT invoked. "
-            f"Invoked agents: {invoked_agents}",
-        )
+# Relevance scorer - ensures response addresses the user's query
+relevance_scorer = RelevanceToQuery()
 
 
-@scorer
-def execution_order_scorer(
-    inputs: dict[str, Any],
-    outputs: dict[str, Any],
-    expectations: dict[str, Any],
-    trace: Trace,
-) -> Feedback:
-    """Verify agents executed in dependency order via span timestamps.
+# =============================================================================
+# Guidelines-Based Scorers (LLM judges)
+# =============================================================================
 
-    Expected order from registry dependencies:
-    trace_analyst -> context_engineer -> agent_architect -> eval_runner
+# Scorer 1: Correct routing to appropriate Genies
+correct_routing_scorer = Guidelines(
+    name="correct_routing",
+    guidelines="""The agent should route questions to the appropriate Genie based on the question topic:
 
-    Args:
-        inputs: The input data
-        outputs: The agent outputs
-        expectations: Must contain 'expected_order' key (list of agent names)
-        trace: MLflow Trace object
+1. Sales pipeline questions (pipeline status, deals, revenue, segments, regions, Americas sales data)
+   should be routed to the customer_sales Genie.
 
-    Returns:
-        Feedback with yes/no value and rationale
-    """
-    expected_order = expectations.get("expected_order", [])
+2. Supply chain questions (raw materials, shortages, forecasts, inventory, suppliers, optimization)
+   should be routed to the supply_chain Genie.
 
-    if not expected_order:
-        return Feedback(
-            name="execution_order",
-            value="skip",
-            rationale="No expected_order in expectations",
-        )
+3. Questions about the agent system itself (what does the agent do, capabilities, how it works)
+   should be answered directly by the supervisor WITHOUT calling any Genie.
 
-    # Get all spans and extract agent invocations with timestamps
-    all_spans = trace.search_spans() if trace else []
+4. Questions that span both domains may need both Genies, but only if both are truly required.
 
-    # Known agent names
-    known_agents = ["trace_analyst", "context_engineer", "agent_architect", "eval_runner"]
+The routing decision should be clear and appropriate for the question asked."""
+)
 
-    # Build list of (agent_name, start_time) tuples
-    agent_invocations = []
-    for span in all_spans:
-        span_name_lower = span.name.lower() if hasattr(span, "name") else ""
-        for agent in known_agents:
-            if agent in span_name_lower:
-                start_time = getattr(span, "start_time_ns", 0)
-                agent_invocations.append((agent, start_time))
-                break
+# Scorer 2: Efficient routing (minimize unnecessary Genie calls)
+efficient_routing_scorer = Guidelines(
+    name="efficient_routing",
+    guidelines="""The agent should minimize Genie calls for efficiency:
 
-    # Sort by start time to get actual execution order
-    agent_invocations.sort(key=lambda x: x[1])
-    actual_order = [agent for agent, _ in agent_invocations]
+1. For pure sales questions (pipeline, deals, revenue by region/segment), ONLY the customer_sales
+   Genie should be called. The supply_chain Genie should NOT be called for sales-only queries.
 
-    # Remove duplicates while preserving order
-    seen = set()
-    actual_order_unique = []
-    for agent in actual_order:
-        if agent not in seen:
-            seen.add(agent)
-            actual_order_unique.append(agent)
+2. For pure supply chain questions (material shortages, inventory, forecasts), ONLY the supply_chain
+   Genie should be called. The customer_sales Genie should NOT be called.
 
-    # Check if expected order is a subsequence of actual order
-    expected_idx = 0
-    for agent in actual_order_unique:
-        if expected_idx < len(expected_order) and agent == expected_order[expected_idx]:
-            expected_idx += 1
+3. Calling both Genies when only one is needed wastes time and resources.
 
-    order_correct = expected_idx == len(expected_order)
+4. The workflow summary should not show unnecessary Genie calls.
 
-    if order_correct:
-        return Feedback(
-            name="execution_order",
-            value="yes",
-            rationale=f"Agents executed in correct order. "
-            f"Expected: {expected_order}, Actual: {actual_order_unique}",
-        )
-    else:
-        return Feedback(
-            name="execution_order",
-            value="no",
-            rationale=f"Agents did NOT execute in expected order. "
-            f"Expected: {expected_order}, Actual: {actual_order_unique}",
-        )
+5. If a Genie returns "no data" or irrelevant response, that was likely an unnecessary call.
 
+Review the workflow execution and assess if all Genie calls were necessary."""
+)
+
+# Scorer 3: Data presentation quality
+data_presentation_scorer = Guidelines(
+    name="data_presentation",
+    guidelines="""When presenting tabular data from Genies, the response should:
+
+1. Include a clear headline that summarizes what was requested
+   (e.g., "Sales Pipeline for the Americas by Segment:")
+
+2. Present the data table clearly, preserving formatting and readability
+
+3. NOT over-explain or add unnecessary analysis to simple data requests
+
+4. Be concise and actionable - users want the data, not lengthy explanations
+
+5. If multiple data sources were used, clearly attribute data to the correct source
+
+The response should let the data speak for itself while being professionally presented."""
+)
+
+# Scorer 4: Workflow summary quality
+summary_quality_scorer = Guidelines(
+    name="summary_quality",
+    guidelines="""The workflow summary should be accurate and helpful:
+
+1. Correctly describe which agents were used and why they were selected
+
+2. NOT claim agents were used when they weren't (e.g., don't mention supply_chain
+   if it wasn't actually called)
+
+3. Correctly attribute data and findings to the right agent
+
+4. Provide a meaningful summary of the execution, not just repeat the response
+
+5. Help users understand the multi-agent workflow that was executed
+
+6. Be factually accurate about what happened during execution
+
+The summary should build trust by accurately describing the system's behavior."""
+)
+
+
+# =============================================================================
+# Trace-Based Custom Scorers
+# =============================================================================
 
 @scorer
-def tool_selection_accuracy(
-    inputs: dict[str, Any],
-    outputs: dict[str, Any],
-    expectations: dict[str, Any],
-    trace: Trace,
-) -> Feedback:
-    """Check if the correct tools were called.
+def genie_call_count(outputs) -> Feedback:
+    """Count how many Genies were called based on agents_used in outputs.
 
-    Based on Pattern 14 from patterns-scorers.md.
-
-    Args:
-        inputs: The input data
-        outputs: The agent outputs
-        expectations: Must contain 'expected_tools' key (list of tool names)
-        trace: MLflow Trace object
-
-    Returns:
-        Feedback with yes/no value and rationale
+    This scorer works with pre-computed outputs that include agents_used metadata.
     """
-    expected_tools = expectations.get("expected_tools", [])
+    agents_used = outputs.get("agents_used", [])
 
-    if not expected_tools:
-        return Feedback(
-            name="tool_selection_accuracy",
-            value="skip",
-            rationale="No expected_tools in expectations",
-        )
+    if agents_used is None:
+        agents_used = []
 
-    # Get actual tool calls from TOOL spans
-    tool_spans = trace.search_spans(span_type=SpanType.TOOL) if trace else []
-    actual_tools = {span.name for span in tool_spans if hasattr(span, "name")}
-
-    # Normalize names (handle fully qualified names like "mcp__mlflow__search_traces")
-    def normalize(name: str) -> str:
-        # Extract the core tool name from various formats
-        if "__" in name:
-            parts = name.split("__")
-            return parts[-1]
-        if "." in name:
-            return name.split(".")[-1]
-        return name
-
-    expected_normalized = {normalize(t) for t in expected_tools}
-    actual_normalized = {normalize(t) for t in actual_tools}
-
-    # Check if all expected tools were called
-    missing = expected_normalized - actual_normalized
-    extra = actual_normalized - expected_normalized
-
-    all_expected_called = len(missing) == 0
-
-    rationale_parts = [
-        f"Expected: {sorted(expected_normalized)}",
-        f"Actual: {sorted(actual_normalized)}",
-    ]
-    if missing:
-        rationale_parts.append(f"Missing: {sorted(missing)}")
-    if extra:
-        rationale_parts.append(f"Extra: {sorted(extra)}")
+    count = len(agents_used)
 
     return Feedback(
-        name="tool_selection_accuracy",
-        value="yes" if all_expected_called else "no",
-        rationale=" | ".join(rationale_parts),
+        name="genie_call_count",
+        value=count,
+        rationale=f"Genies called: {agents_used if agents_used else 'none'}"
     )
 
 
 @scorer
-def workspace_io_correctness(
-    inputs: dict[str, Any],
-    outputs: dict[str, Any],
-    expectations: dict[str, Any],
-    trace: Trace,
-) -> Feedback:
-    """Verify workspace read/write patterns match agent role.
+def has_workflow_summary(outputs) -> Feedback:
+    """Check if the response includes a workflow summary."""
+    summary = outputs.get("workflow_summary", "")
 
-    Checks that agents read from required keys and write to expected output keys.
-
-    Args:
-        inputs: The input data
-        outputs: The agent outputs
-        expectations: Must contain 'expected_reads' and/or 'expected_writes' keys
-        trace: MLflow Trace object
-
-    Returns:
-        Feedback with yes/no value and rationale
-    """
-    expected_reads = expectations.get("expected_reads", [])
-    expected_writes = expectations.get("expected_writes", [])
-
-    if not expected_reads and not expected_writes:
-        return Feedback(
-            name="workspace_io_correctness",
-            value="skip",
-            rationale="No expected_reads or expected_writes in expectations",
-        )
-
-    # Get tool spans and extract workspace operations
-    tool_spans = trace.search_spans(span_type=SpanType.TOOL) if trace else []
-
-    actual_reads = set()
-    actual_writes = set()
-
-    for span in tool_spans:
-        span_name = span.name.lower() if hasattr(span, "name") else ""
-        span_inputs = getattr(span, "inputs", {}) or {}
-
-        if "read_from_workspace" in span_name or "read" in span_name:
-            if isinstance(span_inputs, dict) and "key" in span_inputs:
-                actual_reads.add(span_inputs["key"])
-
-        if "write_to_workspace" in span_name or "write" in span_name:
-            if isinstance(span_inputs, dict) and "key" in span_inputs:
-                actual_writes.add(span_inputs["key"])
-
-    # Check reads
-    missing_reads = set(expected_reads) - actual_reads
-    missing_writes = set(expected_writes) - actual_writes
-
-    all_correct = len(missing_reads) == 0 and len(missing_writes) == 0
-
-    rationale_parts = []
-    if expected_reads:
-        rationale_parts.append(f"Expected reads: {expected_reads}, Actual: {sorted(actual_reads)}")
-    if expected_writes:
-        rationale_parts.append(f"Expected writes: {expected_writes}, Actual: {sorted(actual_writes)}")
-    if missing_reads:
-        rationale_parts.append(f"Missing reads: {sorted(missing_reads)}")
-    if missing_writes:
-        rationale_parts.append(f"Missing writes: {sorted(missing_writes)}")
+    has_summary = bool(summary and len(summary) > 50)
 
     return Feedback(
-        name="workspace_io_correctness",
-        value="yes" if all_correct else "no",
-        rationale=" | ".join(rationale_parts),
+        name="has_workflow_summary",
+        value=has_summary,
+        rationale=f"Workflow summary {'present' if has_summary else 'missing or too short'} ({len(summary) if summary else 0} chars)"
     )
+
+
+@scorer
+def response_has_data_table(outputs) -> Feedback:
+    """Check if the response contains a markdown table."""
+    response = outputs.get("response", "")
+
+    if response is None:
+        return Feedback(
+            name="has_data_table",
+            value=False,
+            rationale="No response available"
+        )
+
+    # Check for markdown table indicators
+    has_table = "|" in response and "---" in response.replace("|", "").replace(":", "").replace("-", "---")
+    has_table = has_table or ("|" in response and response.count("|") >= 4)
+
+    return Feedback(
+        name="has_data_table",
+        value=has_table,
+        rationale=f"Response {'contains' if has_table else 'does not contain'} a data table"
+    )
+
+
+@scorer(aggregations=["mean", "min", "max", "median", "p90"])
+def response_length_words(outputs) -> int:
+    """Count words in the response for length analysis."""
+    response = outputs.get("response", "")
+
+    if response is None:
+        return 0
+
+    return len(response.split())
+
+
+# =============================================================================
+# Routing Quality Scorers (for metadata-enhanced evaluation)
+# =============================================================================
+
+@scorer
+def routing_matches_expected(inputs, outputs) -> Feedback:
+    """
+    Check if actual routing matches expected routing.
+
+    This scorer requires metadata with 'expected_routing' and 'actual_routing' fields.
+    When using with mlflow.genai.evaluate(), include these in the outputs dict.
+    """
+    # This will be called on outputs that include metadata
+    expected = outputs.get("metadata", {}).get("expected_routing")
+    actual = outputs.get("metadata", {}).get("actual_routing")
+
+    if expected is None or actual is None:
+        return Feedback(
+            name="routing_matches_expected",
+            value="skip",
+            rationale="Missing routing metadata (expected_routing or actual_routing)"
+        )
+
+    # Normalize to lists for comparison
+    expected_list = [expected] if isinstance(expected, str) else list(expected)
+    actual_list = [actual] if isinstance(actual, str) else list(actual)
+
+    matches = set(expected_list) == set(actual_list)
+
+    return Feedback(
+        name="routing_matches_expected",
+        value="yes" if matches else "no",
+        rationale=f"Expected: {expected_list}, Actual: {actual_list}"
+    )
+
+
+# =============================================================================
+# Scorer Collections
+# =============================================================================
+
+# All scorers for comprehensive evaluation
+ALL_SCORERS = [
+    # Built-in
+    safety_scorer,
+    relevance_scorer,
+    # Guidelines
+    correct_routing_scorer,
+    efficient_routing_scorer,
+    data_presentation_scorer,
+    summary_quality_scorer,
+    # Custom
+    genie_call_count,
+    has_workflow_summary,
+    response_has_data_table,
+    response_length_words,
+]
+
+# Core scorers for quick evaluation
+CORE_SCORERS = [
+    safety_scorer,
+    relevance_scorer,
+    correct_routing_scorer,
+    efficient_routing_scorer,
+]
+
+# Guidelines-only scorers (for LLM judge evaluation)
+GUIDELINES_SCORERS = [
+    correct_routing_scorer,
+    efficient_routing_scorer,
+    data_presentation_scorer,
+    summary_quality_scorer,
+]
+
+# Metric scorers (custom code-based)
+METRIC_SCORERS = [
+    genie_call_count,
+    has_workflow_summary,
+    response_has_data_table,
+    response_length_words,
+]
+
+
+def get_scorers(preset: str = "all"):
+    """
+    Get a preset collection of scorers.
+
+    Args:
+        preset: One of "all", "core", "guidelines", "metrics"
+
+    Returns:
+        List of scorer objects
+    """
+    presets = {
+        "all": ALL_SCORERS,
+        "core": CORE_SCORERS,
+        "guidelines": GUIDELINES_SCORERS,
+        "metrics": METRIC_SCORERS,
+    }
+
+    return presets.get(preset, ALL_SCORERS)
+
+
+if __name__ == "__main__":
+    print("Available scorer presets:")
+    print(f"  all: {len(ALL_SCORERS)} scorers")
+    print(f"  core: {len(CORE_SCORERS)} scorers")
+    print(f"  guidelines: {len(GUIDELINES_SCORERS)} scorers")
+    print(f"  metrics: {len(METRIC_SCORERS)} scorers")
+
+    print("\nAll scorers:")
+    for s in ALL_SCORERS:
+        name = getattr(s, "name", s.__name__ if hasattr(s, "__name__") else str(s))
+        print(f"  - {name}")

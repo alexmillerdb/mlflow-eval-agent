@@ -1,0 +1,143 @@
+[
+  {
+    "id": 1,
+    "name": "Build evaluation dataset from traces",
+    "type": "dataset",
+    "status": "completed",
+    "details": {
+      "strategy": "traces",
+      "description": "Extract inputs and outputs from production traces. No predict_fn needed since we're evaluating existing responses.",
+      "sample_trace_ids": [
+        "tr-a42854090ea8d5dbed6d596c3f69a06a",
+        "tr-d45af7104661af36e7ccd1e81a76f2d8",
+        "tr-de7a3d44f5f4f8ce60d9ab197dd3200a",
+        "tr-27590fb91da88b6e7db29b35c60e13ee",
+        "tr-a077529e0ca08f9cc1692bf7e571fa82",
+        "tr-93a725dc20d5e0b1fe2a31192d79bd41"
+      ],
+      "input_pattern": {
+        "field": "messages",
+        "format": "list of user messages with role/content"
+      },
+      "output_pattern": {
+        "field": "response items",
+        "format": "list of assistant responses with output_text"
+      },
+      "cases_to_include": [
+        "Sales pipeline queries (customer_sales routing)",
+        "Supply chain queries (supply_chain routing)",
+        "Multi-genie queries (both agents)",
+        "System explanation queries (no genie needed)",
+        "Error cases for robustness testing"
+      ],
+      "target_count": 15
+    }
+  },
+  {
+    "id": 2,
+    "name": "Create scorers for multi-agent evaluation",
+    "type": "scorer",
+    "status": "completed",
+    "details": {
+      "builtin_scorers": [
+        {
+          "name": "Safety",
+          "type": "builtin",
+          "rationale": "Required for all agents - ensures responses don't contain harmful content"
+        },
+        {
+          "name": "RelevanceToQuery",
+          "type": "builtin",
+          "rationale": "Ensures the agent's response addresses the user's business question"
+        }
+      ],
+      "custom_scorers": [
+        {
+          "name": "correct_routing",
+          "type": "guidelines",
+          "guidelines": "The agent should route sales pipeline questions to customer_sales Genie and supply chain questions to supply_chain Genie. Questions about the system itself should be answered directly by the supervisor without calling any Genie.",
+          "rationale": "Core functionality - agent must route to correct specialized Genies"
+        },
+        {
+          "name": "efficient_routing",
+          "type": "guidelines",
+          "guidelines": "The agent should minimize Genie calls. It should NOT call supply_chain Genie for pure sales questions, and NOT call customer_sales Genie for pure supply chain questions. Unnecessary calls waste time and resources.",
+          "rationale": "Performance optimization - observed traces show suboptimal routing (e.g., calling supply_chain for sales-only queries)"
+        },
+        {
+          "name": "data_presentation",
+          "type": "guidelines",
+          "guidelines": "When presenting tabular data from Genies, the response should include a clear headline summarizing what was requested, followed by the data table. The response should be concise and not over-explain or add unnecessary analysis.",
+          "rationale": "User experience - responses should be clear and actionable"
+        },
+        {
+          "name": "summary_quality",
+          "type": "guidelines",
+          "guidelines": "The workflow summary should accurately describe which agents were used, why they were selected, and key findings. It should NOT claim agents were used when they weren't, and should correctly attribute data to the right agent.",
+          "rationale": "Accuracy of meta-information in responses"
+        }
+      ],
+      "not_applicable": [
+        {
+          "name": "Correctness",
+          "reason": "Would require ground truth expected_facts for each query - can add later with manual curation"
+        },
+        {
+          "name": "RetrievalGroundedness",
+          "reason": "No RETRIEVER span type in traces - this is a routing/orchestration agent, not RAG"
+        }
+      ]
+    }
+  },
+  {
+    "id": 3,
+    "name": "Generate evaluation script",
+    "type": "script",
+    "status": "completed",
+    "details": {
+      "script_name": "eval_multi_genie_agent.py",
+      "evaluation_mode": "pre-computed outputs (no predict_fn)",
+      "data_format": {
+        "inputs": {"messages": [{"role": "user", "content": "..."}]},
+        "outputs": {"response": "...", "workflow_summary": "..."}
+      },
+      "scorers_to_use": [
+        "Safety()",
+        "RelevanceToQuery()",
+        "Guidelines(name='correct_routing', guidelines='...')",
+        "Guidelines(name='efficient_routing', guidelines='...')",
+        "Guidelines(name='data_presentation', guidelines='...')",
+        "Guidelines(name='summary_quality', guidelines='...')"
+      ],
+      "key_patterns": {
+        "api": "mlflow.genai.evaluate()",
+        "imports": "from mlflow.genai.scorers import Safety, RelevanceToQuery, Guidelines"
+      }
+    }
+  },
+  {
+    "id": 4,
+    "name": "Run evaluation and validate results",
+    "type": "validate",
+    "status": "completed",
+    "details": {
+      "success_criteria": [
+        "All scorers execute without errors",
+        "Safety scorer passes for all test cases",
+        "RelevanceToQuery passes for >80% of cases",
+        "correct_routing passes for >90% of cases",
+        "Results are logged to MLflow experiment"
+      ],
+      "validation_steps": [
+        "Run eval script on dataset",
+        "Review aggregate metrics",
+        "Identify failing cases and root causes",
+        "Document findings for future improvements"
+      ],
+      "expected_issues": [
+        "Suboptimal routing (supply_chain called for sales-only queries)",
+        "Rate limit errors in some traces (infrastructure issue)"
+      ]
+    }
+  }
+]

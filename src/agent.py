@@ -1,18 +1,42 @@
-"""
-MLflow Evaluation Agent
+"""Simplified MLflow Evaluation Agent.
 
-A modular, evaluation-driven agent built with Claude Agent SDK.
-Features coordinator + sub-agent architecture with inter-agent communication
-via shared workspace.
+Following Anthropic best practices:
+- Single agent with good prompts (no coordinator + sub-agents)
+- Session isolation with fresh context
+- External prompts in markdown files
+- Minimal tool set (3 tools vs 11)
+
+Supports two modes:
+- Interactive (-i): Free-form queries
+- Autonomous (-a): Auto-continue loop with task tracking
+
+~250 lines vs original ~350 lines
 """
 
-import os
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import AsyncIterator, Optional
 
-import mlflow.anthropic
+# =============================================================================
+# MLFLOW SETUP - Must happen BEFORE importing mlflow.anthropic
+# The mlflow.anthropic import triggers tracking initialization, so we must
+# set tracking_uri first to avoid defaulting to local SQLite.
+# =============================================================================
+import mlflow
+from .config import Config
+
+_config = Config.from_env(validate=False)  # Don't validate - may not have all env vars
+mlflow.set_tracking_uri(_config.tracking_uri)
+if _config.agent_experiment_id:
+    mlflow.set_experiment(experiment_id=_config.agent_experiment_id)
+
+import mlflow.anthropic  # Now imports with correct tracking URI
+mlflow.anthropic.autolog()
+
+# =============================================================================
 
 from claude_agent_sdk import (
     ClaudeSDKClient,
@@ -23,210 +47,129 @@ from claude_agent_sdk import (
     ToolUseBlock,
     ToolResultBlock,
     ResultMessage,
-    SystemMessage,
-    HookMatcher,
-    HookContext,
     create_sdk_mcp_server,
 )
 
-from .config import EvalAgentConfig
-from .workspace import SharedWorkspace
-from .tools import create_tools, MCPTools, InternalTools, BuiltinTools
-from .subagents import create_subagents, get_coordinator_prompt
-from .tool_compression import cleanup_cache, get_cache_stats
+from .tools import create_tools, MCPTools, BuiltinTools
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Paths
+PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
-# Hook callback for observability
-async def _log_tool_use(
-    input_data: dict,
-    tool_use_id: str | None,
-    context: HookContext
-) -> dict:
-    """Log tool usage for observability, especially MLflow operations."""
-    tool_name = input_data.get('tool_name', 'unknown')
-    if tool_name.startswith('mcp__mlflow'):
-        logger.info(f"MLflow operation completed: {tool_name}")
-    return {}
+
+# =============================================================================
+# PROMPT LOADING
+# =============================================================================
+
+@mlflow.trace
+def load_prompt(name: str = "system") -> str:
+    """Load external prompt from prompts/ directory."""
+    path = PROMPTS_DIR / f"{name}.md"
+    if path.exists():
+        return path.read_text()
+    logger.warning(f"Prompt file not found: {path}")
+    return ""
 
 
 @dataclass
-class EvalAgentResult:
+class AgentResult:
     """Result from agent interaction."""
     success: bool
     response: str
-    run_id: Optional[str] = None
+    event_type: str = "text"  # text | thinking | tool_use | tool_result | result
+
+    # Optional fields
     cost_usd: Optional[float] = None
     session_id: Optional[str] = None
-    timing_metrics: Optional[dict] = None
-
-    # Event type: text | thinking | tool_use | tool_result | todo_update | subagent | system | result
-    event_type: str = "text"
-
-    # Tool call fields
     tool_name: Optional[str] = None
     tool_input: Optional[dict] = None
-    tool_use_id: Optional[str] = None
-
-    # Tool result fields
     tool_result: Optional[str] = None
-    tool_is_error: Optional[bool] = None
-
-    # Todo fields
-    todos: Optional[list] = None
-
-    # Subagent fields
-    subagent_name: Optional[str] = None
-
-    # ThinkingBlock fields (Opus 4.5 reasoning)
     thinking_content: Optional[str] = None
-    thinking_signature: Optional[str] = None
-
-    # SystemMessage fields
-    system_subtype: Optional[str] = None
-    system_data: Optional[dict] = None
-
-    # ResultMessage usage fields
     usage_data: Optional[dict] = None
-    num_turns: Optional[int] = None
     duration_ms: Optional[int] = None
-    duration_api_ms: Optional[int] = None
-
-    # Context usage monitoring
-    context_warning: Optional[str] = None
 
 
-class MLflowEvalAgent:
-    """MLflow Evaluation Agent with inter-agent communication.
+class MLflowAgent:
+    """Simplified MLflow Evaluation Agent.
 
     Features:
-    - Coordinator + 3 specialized sub-agents
-    - Instance-scoped workspace for inter-agent data passing
-    - Skills loaded from filesystem
-    - Dynamic evaluation script generation
+    - Single agent with 3 tools (vs coordinator + 4 sub-agents + 11 tools)
+    - External prompts for easy iteration
+    - File-based state management
+    - Session support for multi-turn conversations
     """
 
-    def __init__(self, config: Optional[EvalAgentConfig] = None):
-        self.config = config or EvalAgentConfig.from_env()
-
-        # Set MLflow tracking configuration
-        mlflow.set_tracking_uri(self.config.tracking_uri)
-        if self.config.experiment_id:
-            mlflow.set_experiment(experiment_id=self.config.experiment_id)
-        mlflow.anthropic.autolog()
-
-        # Set auth env vars if using config profile (preferred)
-        if self.config.databricks_config_profile:
-            os.environ["DATABRICKS_CONFIG_PROFILE"] = self.config.databricks_config_profile
-        elif self.config.databricks_host:
-            os.environ["DATABRICKS_HOST"] = self.config.databricks_host
-            if self.config.databricks_token:
-                os.environ["DATABRICKS_TOKEN"] = self.config.databricks_token
-
-        self.workspace = SharedWorkspace(max_context_chars=self.config.workspace_context_max_chars)
-        self._client: Optional[ClaudeSDKClient] = None
-        self._start_time: Optional[float] = None
+    def __init__(self, config: Optional["Config"] = None):
+        from .config import Config
+        self.config = config or Config.from_env()
         self._last_session_id: Optional[str] = None
-
-        # Clean up old cached tool results on initialization
-        removed = cleanup_cache(max_age_hours=24)
-        if removed > 0:
-            logger.info(f"Cleaned up {removed} old tool result cache files")
 
     @property
     def session_id(self) -> Optional[str]:
-        """Get the last session ID for resumption."""
+        """Last session ID for resumption."""
         return self._last_session_id
 
-    def _validate_skills(self) -> list[str]:
-        """Validate skills exist with graceful fallback."""
-        warnings = []
-        skills_dir = self.config.skills_dir
-        expected_skills = [
-            "mlflow-evaluation/SKILL.md",
-            "trace-analysis/SKILL.md",
-            "context-engineering/SKILL.md",
-        ]
+    @mlflow.trace
+    def _build_system_prompt(self) -> str:
+        """Build minimal system prompt with just experiment context.
 
-        for skill_path in expected_skills:
-            if not (skills_dir / skill_path).exists():
-                warnings.append(f"Skill not found: {skill_path}")
+        Note: Detailed tool/workflow info moved to worker/initializer prompts
+        and mlflow-evaluation skill to reduce token overhead.
+        """
+        # Only include experiment context - no system.md (deleted for token savings)
+        if self.config.experiment_id:
+            return f"## Current Experiment\nExperiment ID: `{self.config.experiment_id}`\n"
+        return ""
 
-        if warnings:
-            logger.warning(f"Some skills are missing: {warnings}")
-        return warnings
-
+    @mlflow.trace
     def _build_options(self, session_id: Optional[str] = None) -> ClaudeAgentOptions:
-        """Build agent options."""
-        skill_warnings = self._validate_skills()
-        tools = create_tools(self.workspace)
+        """Build agent options with simplified tool set."""
+        tools = create_tools()
 
         mcp_server = create_sdk_mcp_server(
             name="mlflow-eval",
-            version="1.0.0",
+            version="2.0.0",  # Simplified version
             tools=tools,
         )
 
-        subagents = create_subagents(self.workspace)
-        system_prompt = get_coordinator_prompt(self.workspace, experiment_id=self.config.experiment_id or "")
-
-        if skill_warnings:
-            system_prompt += f"\n\nNOTE: Some skill files are missing: {skill_warnings}\n"
-
-        # Build environment variables for MLflow auth
-        env_vars = {
-            "MLFLOW_TRACKING_URI": "databricks",
-        }
-        # Prefer config profile for authentication
-        if self.config.databricks_config_profile:
-            env_vars["DATABRICKS_CONFIG_PROFILE"] = self.config.databricks_config_profile
-        else:
-            # Fallback to direct credentials
-            if self.config.databricks_host:
-                env_vars["DATABRICKS_HOST"] = self.config.databricks_host
-            if self.config.databricks_token:
-                env_vars["DATABRICKS_TOKEN"] = self.config.databricks_token
-
         return ClaudeAgentOptions(
-            system_prompt=system_prompt,
-            agents=subagents,
+            system_prompt=self._build_system_prompt(),
             mcp_servers={"mlflow-eval": mcp_server},
             resume=session_id,
             allowed_tools=[
                 # Built-in Claude tools
-                BuiltinTools.READ, BuiltinTools.BASH, BuiltinTools.GLOB,
-                BuiltinTools.GREP, BuiltinTools.SKILL,
-                # Internal workspace tools
-                InternalTools.WRITE_TO_WORKSPACE,
-                InternalTools.READ_FROM_WORKSPACE,
-                InternalTools.CHECK_DEPENDENCIES,
-                # MLflow tools (in-process, replaces external mlflow-mcp server)
-                MCPTools.SEARCH_TRACES, MCPTools.GET_TRACE,
-                MCPTools.SET_TRACE_TAG, MCPTools.DELETE_TRACE_TAG,
-                MCPTools.LOG_FEEDBACK, MCPTools.LOG_EXPECTATION,
-                MCPTools.GET_ASSESSMENT, MCPTools.UPDATE_ASSESSMENT,
+                BuiltinTools.READ,
+                BuiltinTools.BASH,
+                BuiltinTools.GLOB,
+                BuiltinTools.GREP,
+                BuiltinTools.SKILL,
+                # Our 3 simplified tools
+                MCPTools.MLFLOW_QUERY,
+                MCPTools.MLFLOW_ANNOTATE,
+                MCPTools.SAVE_FINDINGS,
             ],
-            hooks={
-                'PostToolUse': [HookMatcher(hooks=[_log_tool_use])]
-            },
             setting_sources=["project"],
             cwd=str(self.config.working_dir),
             permission_mode="bypassPermissions",
-            env=env_vars,
             model=self.config.model,
             max_turns=self.config.max_turns,
         )
 
-    async def query(self, prompt: str, session_id: Optional[str] = None) -> AsyncIterator[EvalAgentResult]:
+    @mlflow.trace(name="agent_query", span_type="AGENT")
+    async def query(
+        self,
+        prompt: str,
+        session_id: Optional[str] = None
+    ) -> AsyncIterator[AgentResult]:
         """Send query and stream results.
 
         Args:
-            prompt: The query to send to the agent.
-            session_id: Optional session ID to resume a previous conversation.
+            prompt: Query for the agent
+            session_id: Optional session ID to resume conversation
         """
-        self._start_time = time.time()
+        start_time = time.time()
         options = self._build_options(session_id=session_id)
 
         async with ClaudeSDKClient(options=options) as client:
@@ -238,110 +181,176 @@ class MLflowEvalAgent:
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             response_text += block.text
-                            yield EvalAgentResult(success=True, response=response_text, event_type="text")
+                            yield AgentResult(
+                                success=True,
+                                response=response_text,
+                                event_type="text"
+                            )
 
                         elif isinstance(block, ThinkingBlock):
-                            # Stream thinking content for Opus 4.5 reasoning visibility
-                            yield EvalAgentResult(
-                                success=True, response=response_text, event_type="thinking",
-                                thinking_content=block.thinking,
-                                thinking_signature=block.signature,
+                            yield AgentResult(
+                                success=True,
+                                response=response_text,
+                                event_type="thinking",
+                                thinking_content=block.thinking
                             )
 
                         elif isinstance(block, ToolUseBlock):
-                            if block.name == "Task":
-                                yield EvalAgentResult(
-                                    success=True, response=response_text, event_type="subagent",
-                                    subagent_name=block.input.get("subagent_type", "unknown"),
-                                    tool_use_id=block.id,
-                                )
-                            elif block.name == "TodoWrite":
-                                yield EvalAgentResult(
-                                    success=True, response=response_text, event_type="todo_update",
-                                    todos=block.input.get("todos", []),
-                                )
-                            else:
-                                yield EvalAgentResult(
-                                    success=True, response=response_text, event_type="tool_use",
-                                    tool_name=block.name, tool_input=block.input, tool_use_id=block.id,
-                                )
-
-                        elif isinstance(block, ToolResultBlock):
-                            yield EvalAgentResult(
-                                success=not block.is_error if block.is_error is not None else True,
-                                response=response_text, event_type="tool_result",
-                                tool_use_id=block.tool_use_id,
-                                tool_result=str(block.content)[:500] if block.content else None,
-                                tool_is_error=block.is_error,
+                            yield AgentResult(
+                                success=True,
+                                response=response_text,
+                                event_type="tool_use",
+                                tool_name=block.name,
+                                tool_input=block.input
                             )
 
-                elif isinstance(message, SystemMessage):
-                    # Yield system metadata events
-                    yield EvalAgentResult(
-                        success=True, response=response_text, event_type="system",
-                        system_subtype=message.subtype,
-                        system_data=message.data,
-                    )
+                        elif isinstance(block, ToolResultBlock):
+                            yield AgentResult(
+                                success=not block.is_error if block.is_error is not None else True,
+                                response=response_text,
+                                event_type="tool_result",
+                                tool_result=str(block.content)[:500] if block.content else None
+                            )
 
                 elif isinstance(message, ResultMessage):
-                    timing = self.workspace.get_timing_metrics()
-                    timing["total_query_time"] = time.time() - self._start_time
-
-                    # Store session_id for follow-up queries
                     self._last_session_id = message.session_id
+                    duration_ms = int((time.time() - start_time) * 1000)
 
-                    # Check for high context usage (Opus 4.5 has 200K token limit)
-                    context_warning = None
-                    if message.usage:
-                        input_tokens = message.usage.get('input_tokens', 0)
-                        if input_tokens > 150000:  # 75% of 200K limit
-                            context_warning = f"Context usage high: {input_tokens:,} tokens (75% of limit)"
-                            logger.warning(context_warning)
-
-                    yield EvalAgentResult(
-                        success=not message.is_error, response=response_text, event_type="result",
-                        cost_usd=message.total_cost_usd, session_id=message.session_id,
-                        timing_metrics=timing,
+                    yield AgentResult(
+                        success=not message.is_error,
+                        response=response_text,
+                        event_type="result",
+                        cost_usd=message.total_cost_usd,
+                        session_id=message.session_id,
                         usage_data=message.usage,
-                        num_turns=message.num_turns,
-                        duration_ms=message.duration_ms,
-                        duration_api_ms=message.duration_api_ms,
-                        context_warning=context_warning,
+                        duration_ms=duration_ms
                     )
 
-    async def analyze_and_generate(
-        self,
-        filter_string: str = "attributes.status = 'OK'",
-        agent_name: str = "my_agent",
-    ) -> str:
-        """Complete workflow: analyze traces and generate evaluation."""
-        prompt = f"""
-        Please perform a complete analysis and generate an evaluation suite:
-
-        1. Use trace_analyst to analyze traces with filter: {filter_string}
-        2. Use context_engineer to identify quality issues
-        3. Generate a comprehensive evaluation script for "{agent_name}"
-
-        The evaluation script should:
-        - Include scorers based on the issues found
-        - Include test cases extracted from failures
-        - Have appropriate thresholds for CI/CD
-        - Be completely runnable standalone
-        """
-
-        final_response = ""
-        async for result in self.query(prompt):
-            final_response = result.response
-
-        return final_response
-
-    def clear_workspace(self):
-        """Clear the workspace for a fresh analysis."""
-        self.workspace.clear()
-        logger.info("Workspace cleared")
+    def clear_state(self):
+        """Clear file-based state for fresh analysis."""
+        from .mlflow_ops import clear_state
+        clear_state()
+        logger.info("State cleared")
 
 
-# CLI entry point for backward compatibility
+# =============================================================================
+# AUTONOMOUS MODE
+# =============================================================================
+
+AUTO_CONTINUE_DELAY_SECONDS = 3
+SESSIONS_DIR = Path("sessions")
+
+
+@mlflow.trace(name="autonomous_evaluation", span_type="AGENT")
+async def run_autonomous(
+    experiment_id: str,
+    max_iterations: Optional[int] = None,
+) -> None:
+    """Run autonomous evaluation loop with task tracking.
+
+    Args:
+        experiment_id: MLflow experiment ID to analyze
+        max_iterations: Maximum iterations (None = until complete)
+    """
+    from .mlflow_ops import (
+        all_tasks_complete,
+        print_progress_summary,
+        print_final_summary,
+        set_session_dir,
+        get_tasks_file,
+    )
+
+    config = Config.from_env()
+    config.experiment_id = experiment_id
+
+    # Set up session directory
+    session_dir = SESSIONS_DIR / config.session_id
+    set_session_dir(session_dir)
+
+    print(f"\nSession: {config.session_id}")
+    print(f"Output:  {session_dir}")
+
+    # Check if first run (no task file exists in this session)
+    is_first_run = not get_tasks_file().exists()
+
+    if is_first_run:
+        print("\n" + "=" * 60)
+        print("  INITIALIZER SESSION")
+        print("  Analyzing traces and creating task plan...")
+        print("=" * 60 + "\n")
+
+    iteration = 0
+    while True:
+        iteration += 1
+
+        # Check iteration limit
+        if max_iterations and iteration > max_iterations:
+            print(f"\nReached max iterations ({max_iterations}). Stopping.")
+            break
+
+        # Check if all tasks complete
+        if not is_first_run and all_tasks_complete():
+            print_final_summary()
+            break
+
+        # Track each iteration as a sub-span
+        with mlflow.start_span(name=f"session_{iteration}") as iter_span:
+            iter_span.set_attribute("iteration", iteration)
+            iter_span.set_attribute("phase", "initializer" if is_first_run else "worker")
+
+            # Fresh agent per session (Anthropic pattern)
+            agent = MLflowAgent(config)
+
+            # Choose prompt based on state
+            prompt_name = "initializer" if is_first_run else "worker"
+            prompt = load_prompt(prompt_name)
+            prompt = prompt.replace("{experiment_id}", experiment_id)
+            prompt = prompt.replace("{session_dir}", str(session_dir))
+
+            # After first run, switch to worker mode
+            is_first_run = False
+
+            print(f"\n--- Session {iteration} ({prompt_name}) ---\n")
+
+            # Run session and stream output
+            try:
+                async for result in agent.query(prompt):
+                    if result.event_type == "text":
+                        # Print incremental text (clear line and reprint for streaming effect)
+                        pass  # Text is accumulated in result.response
+
+                # Print final response
+                if result and result.response:
+                    print(result.response)
+                    iter_span.set_attribute("response_length", len(result.response))
+
+                    # Show cost if available
+                    if result.cost_usd:
+                        print(f"\n[Cost: ${result.cost_usd:.4f}]")
+                        iter_span.set_attribute("cost_usd", result.cost_usd)
+
+            except KeyboardInterrupt:
+                iter_span.set_attribute("status", "interrupted")
+                print("\n\nInterrupted by user.")
+                break
+            except Exception as e:
+                iter_span.set_attribute("error", str(e))
+                print(f"\nError in session: {e}")
+                logger.exception("Session error")
+
+        # Progress summary
+        print_progress_summary()
+
+        # Auto-continue with interrupt window
+        print(f"\nContinuing in {AUTO_CONTINUE_DELAY_SECONDS}s (Ctrl+C to stop)...")
+        try:
+            await asyncio.sleep(AUTO_CONTINUE_DELAY_SECONDS)
+        except KeyboardInterrupt:
+            print("\n\nStopped by user.")
+            break
+
+
+# CLI entry point
 if __name__ == "__main__":
-    from .cli import cli
-    cli()
+    from .cli import main
+    asyncio.run(main())

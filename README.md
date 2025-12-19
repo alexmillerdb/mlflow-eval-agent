@@ -1,6 +1,6 @@
 # MLflow Evaluation Agent
 
-An evaluation-driven agent for analyzing and optimizing GenAI agents deployed on Databricks. Built with the Claude Agent SDK using a coordinator + sub-agent architecture.
+An evaluation-driven agent for analyzing and optimizing GenAI agents deployed on Databricks. Built with the Claude Agent SDK following [Anthropic's autonomous coding pattern](https://github.com/anthropics/claude-quickstarts/tree/main/autonomous-coding).
 
 ## Overview
 
@@ -8,38 +8,57 @@ This agent helps you:
 - **Analyze production traces** to find errors, performance issues, and patterns
 - **Generate evaluation suites** with custom scorers based on real failures
 - **Optimize agent context** (prompts, RAG, state management, token budgets)
-- **Improve architecture** with multi-agent patterns and tool orchestration
+- **Run autonomous evaluation loops** that build complete eval suites
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      COORDINATOR AGENT                          │
-│  Orchestrates sub-agents • Synthesizes findings • Generates eval│
+│                     AUTONOMOUS MODE (-a)                         │
+│    Fresh context per session • File-based state persistence      │
 └─────────────────────────────────────────────────────────────────┘
-                               │
-        ┌──────────────────────┼──────────────────────┐
-        ▼                      ▼                      ▼
-┌───────────────┐    ┌───────────────┐    ┌───────────────┐
-│ trace_analyst │───▶│context_engineer│───▶│agent_architect│
-│               │    │               │    │               │
-│ Search traces │    │ Prompt opt    │    │ Map arch      │
-│ Find patterns │    │ Context rot   │    │ Find issues   │
-│ Extract evals │    │ Token mgmt    │    │ Recommend     │
-└───────────────┘    └───────────────┘    └───────────────┘
-        │                      │                      │
-        └──────────────────────┼──────────────────────┘
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      SHARED WORKSPACE                           │
-│  trace_analysis_summary • error_patterns • performance_metrics  │
-│  context_recommendations • extracted_eval_cases                 │
-└─────────────────────────────────────────────────────────────────┘
+                                │
+           ┌────────────────────┴────────────────────┐
+           ▼                                         ▼
+┌───────────────────────┐                 ┌───────────────────────┐
+│   INITIALIZER (1st)   │                 │    WORKER (2nd+)      │
+│   prompts/            │                 │    prompts/           │
+│   initializer.md      │                 │    worker.md          │
+│                       │                 │                       │
+│   • Analyze traces    │    creates      │   • Read eval_tasks   │
+│   • Create strategy   │ ──────────────► │   • Complete 1 task   │
+│   • Write task plan   │  eval_tasks.json│   • Update status     │
+└───────────────────────┘                 └───────────────────────┘
+           │                                         │
+           └────────────────────┬────────────────────┘
+                                ▼
+           ┌───────────────────────────────────────────┐
+           │           3 MCP Tools + Built-ins         │
+           ├───────────────────────────────────────────┤
+           │ mlflow_query     │ Read, Bash, Glob      │
+           │ mlflow_annotate  │ Grep, Skill           │
+           │ save_findings    │                       │
+           └───────────────────────────────────────────┘
 ```
 
-**Workflow**: `trace_analyst` → `context_engineer` → `agent_architect`
+### Autonomous Workflow
 
-Each sub-agent writes findings to a shared workspace. Downstream agents read and build on previous findings.
+**Session Architecture:**
+- Each session runs in a **fresh context window** (no memory of previous sessions)
+- State is persisted via files: `eval_tasks.json` in session directory
+- Auto-continues until all tasks complete or user interrupts
+
+**Initializer Session** (`prompts/initializer.md`):
+1. Analyzes traces to understand the agent being evaluated
+2. Determines evaluation strategy (scorers, dataset approach)
+3. Creates `eval_tasks.json` with ordered task plan
+4. Saves analysis to session directory
+
+**Worker Sessions** (`prompts/worker.md`):
+1. Reads `eval_tasks.json` to find next pending task
+2. Completes ONE task (dataset, scorer, script, or validate)
+3. Updates task status to "completed"
+4. Exits — next session picks up next task
 
 ## Getting Started
 
@@ -94,41 +113,24 @@ DATABRICKS_CLUSTER_ID=                      # For classic compute
 | `DATABRICKS_HOST` | Yes | Databricks workspace URL |
 | `DATABRICKS_TOKEN` | Yes* | Personal access token |
 | `DATABRICKS_CONFIG_PROFILE` | Yes* | Alternative to token - uses ~/.databrickscfg |
-| `MLFLOW_EXPERIMENT_ID` | Recommended | Target experiment for trace analysis |
+| `MLFLOW_EXPERIMENT_ID` | Recommended | Target experiment to analyze |
+| `MLFLOW_AGENT_EXPERIMENT_ID` | No | Experiment for agent's own traces (debugging) |
 | `MLFLOW_TRACKING_URI` | No | MLflow server (default: `databricks`) |
-| `DABS_MODEL` | No | Model for coordinator (default: `opus`) |
+| `DABS_MODEL` | No | Model to use (default: `sonnet`) |
 
 *One of `DATABRICKS_TOKEN` or `DATABRICKS_CONFIG_PROFILE` is required.
-
-### MCP Server Setup
-
-Add to `.claude/settings.local.json`:
-
-```json
-{
-  "mcpServers": {
-    "mlflow-mcp": {
-      "command": "uv",
-      "args": ["run", "--with", "mlflow[mcp]>=3.5.1", "mlflow", "mcp", "run"],
-      "env": {
-        "MLFLOW_TRACKING_URI": "databricks"
-      }
-    }
-  }
-}
-```
 
 ### Running the Agent
 
 ```bash
-# Interactive mode
-uv run python -m src.agent -i
+# Autonomous mode - builds complete evaluation suite
+uv run python -m src.cli -a -e <experiment_id>
+
+# Interactive mode - free-form queries
+uv run python -m src.cli -i
 
 # Single query
-uv run python -m src.agent "Analyze traces from experiment 123"
-
-# With filter
-uv run python -m src.agent --analyze "attributes.status = 'ERROR'"
+uv run python -m src.cli "Analyze traces from experiment 123"
 ```
 
 ## Project Structure
@@ -136,52 +138,42 @@ uv run python -m src.agent --analyze "attributes.status = 'ERROR'"
 ```
 mlflow-eval-agent/
 ├── src/
-│   ├── agent.py              # Main agent entry point
-│   ├── config.py             # Configuration management
-│   ├── workspace.py          # Shared workspace for inter-agent communication
-│   ├── tools.py              # Tool definitions
-│   └── subagents/
-│       ├── coordinator.py    # Coordinator prompt generation
-│       ├── registry.py       # Agent registry and config
-│       ├── trace_analyst.py  # Trace analysis sub-agent
-│       ├── context_engineer.py
-│       ├── agent_architect.py
-│       └── eval_runner.py
+│   ├── agent.py              # Main agent + autonomous loop
+│   ├── cli.py                # CLI with -i/-a modes
+│   ├── config.py             # Simplified configuration
+│   ├── tools.py              # 3 MCP tools
+│   ├── mlflow_ops.py         # MLflow operations
+│   └── legacy/               # Archived code (old sub-agents, tests)
 │
-├── .claude/
-│   ├── commands/             # Slash commands
-│   └── skills/               # Knowledge bases for agents
-│       ├── mlflow-evaluation/
-│       ├── trace-analysis/
-│       └── context-engineering/
+├── prompts/                  # External prompt files
+│   ├── initializer.md        # First session: analyze + plan
+│   └── worker.md             # Subsequent sessions: execute tasks
 │
-└── tests/
+├── sessions/                 # Session output directories (gitignored)
+│
+└── .claude/
+    ├── commands/             # Slash commands
+    └── skills/
+        └── mlflow-evaluation/
 ```
 
-## Sub-Agents
+## Tools
 
-| Agent | Triggers | Outputs |
-|-------|----------|---------|
-| **trace_analyst** | traces, errors, performance, debugging | `trace_analysis_summary`, `error_patterns`, `performance_metrics` |
-| **context_engineer** | optimize, prompt, context, tokens, RAG | `context_recommendations` |
-| **agent_architect** | architecture, multi-agent, design, tools | Tags on traces |
-| **eval_runner** | (internal) Executes generated eval code | `eval_results` |
+The agent uses 3 simplified MCP tools:
+
+| Tool | Purpose |
+|------|---------|
+| `mlflow_query` | Search traces, get trace details, retrieve assessments |
+| `mlflow_annotate` | Set tags, log feedback, log expectations on traces |
+| `save_findings` | Persist state to `.claude/state/` for cross-session continuity |
 
 ## Skills
 
-Skills provide domain knowledge to agents:
+Skills provide domain knowledge loaded via the `Skill` tool:
 
 | Skill | Use When |
 |-------|----------|
 | `mlflow-evaluation` | Generating evaluation code, creating scorers, building datasets |
-| `trace-analysis` | Analyzing traces, profiling latency, debugging failures |
-| `context-engineering` | Optimizing prompts, RAG context, state management |
-
-## Running Tests
-
-```bash
-uv run pytest tests/ -v
-```
 
 ## License
 
