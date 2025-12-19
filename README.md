@@ -32,27 +32,27 @@ This agent helps you:
            │                                         │
            └────────────────────┬────────────────────┘
                                 ▼
-                      ┌─────────────────┐
-                      │   3 MCP Tools   │
-                      ├─────────────────┤
-                      │ mlflow_query    │
-                      │ mlflow_annotate │
-                      │ save_findings   │
-                      └─────────────────┘
+           ┌───────────────────────────────────────────┐
+           │           3 MCP Tools + Built-ins         │
+           ├───────────────────────────────────────────┤
+           │ mlflow_query     │ Read, Bash, Glob      │
+           │ mlflow_annotate  │ Grep, Skill           │
+           │ save_findings    │                       │
+           └───────────────────────────────────────────┘
 ```
 
 ### Autonomous Workflow
 
 **Session Architecture:**
 - Each session runs in a **fresh context window** (no memory of previous sessions)
-- State is persisted via files: `eval_tasks.json`, `.claude/state/`
+- State is persisted via files: `eval_tasks.json` in session directory
 - Auto-continues until all tasks complete or user interrupts
 
 **Initializer Session** (`prompts/initializer.md`):
 1. Analyzes traces to understand the agent being evaluated
 2. Determines evaluation strategy (scorers, dataset approach)
 3. Creates `eval_tasks.json` with ordered task plan
-4. Saves analysis to `.claude/state/analysis.json`
+4. Saves analysis to session directory
 
 **Worker Sessions** (`prompts/worker.md`):
 1. Reads `eval_tasks.json` to find next pending task
@@ -113,12 +113,12 @@ DATABRICKS_CLUSTER_ID=                      # For classic compute
 | `DATABRICKS_HOST` | Yes | Databricks workspace URL |
 | `DATABRICKS_TOKEN` | Yes* | Personal access token |
 | `DATABRICKS_CONFIG_PROFILE` | Yes* | Alternative to token - uses ~/.databrickscfg |
-| `MLFLOW_EXPERIMENT_ID` | Recommended | Target experiment for trace analysis |
+| `MLFLOW_EXPERIMENT_ID` | Recommended | Target experiment to analyze |
+| `MLFLOW_AGENT_EXPERIMENT_ID` | No | Experiment for agent's own traces (debugging) |
 | `MLFLOW_TRACKING_URI` | No | MLflow server (default: `databricks`) |
 | `DABS_MODEL` | No | Model to use (default: `sonnet`) |
 
 *One of `DATABRICKS_TOKEN` or `DATABRICKS_CONFIG_PROFILE` is required.
-```
 
 ### Running the Agent
 
@@ -143,20 +143,18 @@ mlflow-eval-agent/
 │   ├── config.py             # Simplified configuration
 │   ├── tools.py              # 3 MCP tools
 │   ├── mlflow_ops.py         # MLflow operations
-│   └── legacy/               # Old sub-agent code (archived)
+│   └── legacy/               # Archived code (old sub-agents, tests)
 │
 ├── prompts/                  # External prompt files
-│   ├── system.md             # Base system prompt
 │   ├── initializer.md        # First session: analyze + plan
 │   └── worker.md             # Subsequent sessions: execute tasks
 │
-├── .claude/
-│   ├── state/                # File-based state persistence
-│   ├── commands/             # Slash commands
-│   └── skills/
-│       └── mlflow-evaluation/
+├── sessions/                 # Session output directories (gitignored)
 │
-└── tests/
+└── .claude/
+    ├── commands/             # Slash commands
+    └── skills/
+        └── mlflow-evaluation/
 ```
 
 ## Tools
@@ -176,12 +174,6 @@ Skills provide domain knowledge loaded via the `Skill` tool:
 | Skill | Use When |
 |-------|----------|
 | `mlflow-evaluation` | Generating evaluation code, creating scorers, building datasets |
-
-## Running Tests
-
-```bash
-uv run pytest tests/ -v
-```
 
 ## License
 
