@@ -6,6 +6,7 @@ Minimal config following KISS principle - only essential settings.
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -20,7 +21,8 @@ class Config:
     databricks_config_profile: str = ""
 
     # MLflow
-    experiment_id: str = ""
+    experiment_id: str = ""  # Target experiment to analyze
+    agent_experiment_id: str = ""  # Experiment for agent's own traces
     tracking_uri: str = "databricks"
 
     # Model
@@ -32,6 +34,9 @@ class Config:
     # Limits
     max_turns: int = 50
 
+    # Session (auto-generated if not provided)
+    session_id: str = ""
+
     @classmethod
     def from_env(cls, validate: bool = True) -> "Config":
         """Load configuration from environment variables."""
@@ -41,13 +46,20 @@ class Config:
         except ImportError:
             pass  # dotenv optional
 
+        # Generate session ID if not provided
+        session_id = os.getenv("SESSION_ID", "")
+        if not session_id:
+            session_id = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
         config = cls(
             databricks_host=os.getenv("DATABRICKS_HOST", ""),
             databricks_token=os.getenv("DATABRICKS_TOKEN", ""),
             databricks_config_profile=os.getenv("DATABRICKS_CONFIG_PROFILE", ""),
             experiment_id=os.getenv("MLFLOW_EXPERIMENT_ID", ""),
+            agent_experiment_id=os.getenv("MLFLOW_AGENT_EXPERIMENT_ID", ""),
             tracking_uri=os.getenv("MLFLOW_TRACKING_URI", "databricks"),
             model=os.getenv("DABS_MODEL", "sonnet"),
+            session_id=session_id,
         )
 
         if validate:

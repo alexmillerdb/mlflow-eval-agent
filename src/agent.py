@@ -20,7 +20,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
-import mlflow.anthropic
+# =============================================================================
+# MLFLOW SETUP - Must happen BEFORE importing mlflow.anthropic
+# The mlflow.anthropic import triggers tracking initialization, so we must
+# set tracking_uri first to avoid defaulting to local SQLite.
+# =============================================================================
+import mlflow
+from .config import Config
+
+_config = Config.from_env(validate=False)  # Don't validate - may not have all env vars
+mlflow.set_tracking_uri(_config.tracking_uri)
+if _config.agent_experiment_id:
+    mlflow.set_experiment(experiment_id=_config.agent_experiment_id)
+
+import mlflow.anthropic  # Now imports with correct tracking URI
+mlflow.anthropic.autolog()
+
+# =============================================================================
 
 from claude_agent_sdk import (
     ClaudeSDKClient,
@@ -34,7 +50,6 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
 )
 
-from .config import Config
 from .tools import create_tools, MCPTools, BuiltinTools
 
 logging.basicConfig(level=logging.INFO)
@@ -44,6 +59,11 @@ logger = logging.getLogger(__name__)
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
+# =============================================================================
+# PROMPT LOADING
+# =============================================================================
+
+@mlflow.trace
 def load_prompt(name: str = "system") -> str:
     """Load external prompt from prompts/ directory."""
     path = PROMPTS_DIR / f"{name}.md"
@@ -84,13 +104,6 @@ class MLflowAgent:
     def __init__(self, config: Optional["Config"] = None):
         from .config import Config
         self.config = config or Config.from_env()
-
-        # MLflow setup
-        mlflow.set_tracking_uri(self.config.tracking_uri)
-        if self.config.experiment_id:
-            mlflow.set_experiment(experiment_id=self.config.experiment_id)
-        mlflow.anthropic.autolog()
-
         self._last_session_id: Optional[str] = None
 
     @property
@@ -98,16 +111,19 @@ class MLflowAgent:
         """Last session ID for resumption."""
         return self._last_session_id
 
+    @mlflow.trace
     def _build_system_prompt(self) -> str:
-        """Build system prompt from external file + experiment context."""
-        prompt = load_prompt("system")
+        """Build minimal system prompt with just experiment context.
 
-        # Add experiment context
+        Note: Detailed tool/workflow info moved to worker/initializer prompts
+        and mlflow-evaluation skill to reduce token overhead.
+        """
+        # Only include experiment context - no system.md (deleted for token savings)
         if self.config.experiment_id:
-            prompt += f"\n\n## Current Experiment\nExperiment ID: `{self.config.experiment_id}`\n"
+            return f"## Current Experiment\nExperiment ID: `{self.config.experiment_id}`\n"
+        return ""
 
-        return prompt
-
+    @mlflow.trace
     def _build_options(self, session_id: Optional[str] = None) -> ClaudeAgentOptions:
         """Build agent options with simplified tool set."""
         tools = create_tools()
@@ -141,6 +157,7 @@ class MLflowAgent:
             max_turns=self.config.max_turns,
         )
 
+    @mlflow.trace(name="agent_query", span_type="AGENT")
     async def query(
         self,
         prompt: str,
@@ -221,9 +238,10 @@ class MLflowAgent:
 # =============================================================================
 
 AUTO_CONTINUE_DELAY_SECONDS = 3
-TASKS_FILE = Path("eval_tasks.json")
+SESSIONS_DIR = Path("sessions")
 
 
+@mlflow.trace(name="autonomous_evaluation", span_type="AGENT")
 async def run_autonomous(
     experiment_id: str,
     max_iterations: Optional[int] = None,
@@ -238,13 +256,22 @@ async def run_autonomous(
         all_tasks_complete,
         print_progress_summary,
         print_final_summary,
+        set_session_dir,
+        get_tasks_file,
     )
 
     config = Config.from_env()
     config.experiment_id = experiment_id
 
-    # Check if first run (no task file exists)
-    is_first_run = not TASKS_FILE.exists()
+    # Set up session directory
+    session_dir = SESSIONS_DIR / config.session_id
+    set_session_dir(session_dir)
+
+    print(f"\nSession: {config.session_id}")
+    print(f"Output:  {session_dir}")
+
+    # Check if first run (no task file exists in this session)
+    is_first_run = not get_tasks_file().exists()
 
     if is_first_run:
         print("\n" + "=" * 60)
@@ -266,40 +293,50 @@ async def run_autonomous(
             print_final_summary()
             break
 
-        # Fresh agent per session (Anthropic pattern)
-        agent = MLflowAgent(config)
+        # Track each iteration as a sub-span
+        with mlflow.start_span(name=f"session_{iteration}") as iter_span:
+            iter_span.set_attribute("iteration", iteration)
+            iter_span.set_attribute("phase", "initializer" if is_first_run else "worker")
 
-        # Choose prompt based on state
-        prompt_name = "initializer" if is_first_run else "worker"
-        prompt = load_prompt(prompt_name)
-        prompt = prompt.replace("{experiment_id}", experiment_id)
+            # Fresh agent per session (Anthropic pattern)
+            agent = MLflowAgent(config)
 
-        # After first run, switch to worker mode
-        is_first_run = False
+            # Choose prompt based on state
+            prompt_name = "initializer" if is_first_run else "worker"
+            prompt = load_prompt(prompt_name)
+            prompt = prompt.replace("{experiment_id}", experiment_id)
+            prompt = prompt.replace("{session_dir}", str(session_dir))
 
-        print(f"\n--- Session {iteration} ({prompt_name}) ---\n")
+            # After first run, switch to worker mode
+            is_first_run = False
 
-        # Run session and stream output
-        try:
-            async for result in agent.query(prompt):
-                if result.event_type == "text":
-                    # Print incremental text (clear line and reprint for streaming effect)
-                    pass  # Text is accumulated in result.response
+            print(f"\n--- Session {iteration} ({prompt_name}) ---\n")
 
-            # Print final response
-            if result and result.response:
-                print(result.response)
+            # Run session and stream output
+            try:
+                async for result in agent.query(prompt):
+                    if result.event_type == "text":
+                        # Print incremental text (clear line and reprint for streaming effect)
+                        pass  # Text is accumulated in result.response
 
-                # Show cost if available
-                if result.cost_usd:
-                    print(f"\n[Cost: ${result.cost_usd:.4f}]")
+                # Print final response
+                if result and result.response:
+                    print(result.response)
+                    iter_span.set_attribute("response_length", len(result.response))
 
-        except KeyboardInterrupt:
-            print("\n\nInterrupted by user.")
-            break
-        except Exception as e:
-            print(f"\nError in session: {e}")
-            logger.exception("Session error")
+                    # Show cost if available
+                    if result.cost_usd:
+                        print(f"\n[Cost: ${result.cost_usd:.4f}]")
+                        iter_span.set_attribute("cost_usd", result.cost_usd)
+
+            except KeyboardInterrupt:
+                iter_span.set_attribute("status", "interrupted")
+                print("\n\nInterrupted by user.")
+                break
+            except Exception as e:
+                iter_span.set_attribute("error", str(e))
+                print(f"\nError in session: {e}")
+                logger.exception("Session error")
 
         # Progress summary
         print_progress_summary()

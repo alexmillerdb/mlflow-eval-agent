@@ -704,13 +704,13 @@ During agent analysis session, tag interesting traces:
 
 ```
 # Agent tags traces via MCP
-mcp__mlflow-eval__set_trace_tag(
+mcp__mlflow-mcp__set_trace_tag(
     trace_id="tr-abc123",
     key="eval_candidate",
     value="error_case"
 )
 
-mcp__mlflow-eval__set_trace_tag(
+mcp__mlflow-mcp__set_trace_tag(
     trace_id="tr-def456",
     key="eval_candidate",
     value="slow_response"

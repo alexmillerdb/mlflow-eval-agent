@@ -95,7 +95,7 @@ Choose scorers based on what you can evaluate:
 
 ## Phase 2: Create Task Plan
 
-Write `eval_tasks.json` with ordered tasks:
+Write `{session_dir}/eval_tasks.json` with ordered tasks:
 
 ```json
 [
@@ -114,7 +114,7 @@ Customize the `details` field based on your trace analysis:
 
 ## Phase 3: Save Initial Analysis
 
-Save findings to `.claude/state/analysis.json`:
+Save findings to `{session_dir}/state/analysis.json`:
 
 ```json
 {
@@ -153,8 +153,8 @@ Save findings to `.claude/state/analysis.json`:
 ## Output Checklist
 
 Before ending this session, verify you have created:
-- [ ] `eval_tasks.json` - Task list for worker sessions
-- [ ] `.claude/state/analysis.json` - Initial trace analysis
+- [ ] `{session_dir}/eval_tasks.json` - Task list for worker sessions
+- [ ] `{session_dir}/state/analysis.json` - Initial trace analysis
 
 ## Tools Available
 
@@ -168,7 +168,7 @@ Before ending this session, verify you have created:
 | `mlflow_annotate` | `tag` | Set tag on trace | `trace_id`, `key`, `value` |
 | `mlflow_annotate` | `feedback` | Log feedback assessment | `trace_id`, `name`, `value` |
 | `mlflow_annotate` | `expectation` | Log ground truth | `trace_id`, `name`, `value` |
-| `save_findings` | - | Save state to `.claude/state/<key>.json` | `key`, `data` |
+| `save_findings` | - | Save state to `{session_dir}/state/<key>.json` | `key`, `data` |
 
 **Example usage:**
 ```json
@@ -181,6 +181,8 @@ Before ending this session, verify you have created:
 // Save analysis
 {"key": "analysis", "data": {"agent_type": "...", "recommended_scorers": [...]}}
 ```
+
+**Efficiency**: Fetch all needed data in ONE call with appropriate filters. Avoid calling `mlflow_query` multiple times for related data. Do not call `mlflow_query` with the same arguments multiple times in a row. Instead, use `mlflow_query` to SEARCH for traces in experiment, then use `mlflow_query` to GET individual traces from the experiment.
 
 ### Builtin Tools
 

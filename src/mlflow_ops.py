@@ -18,8 +18,39 @@ logger = logging.getLogger(__name__)
 # Single truncation limit (vs 4 modes previously)
 MAX_OUTPUT_CHARS = 3000
 
-# State directory for file-based persistence
-STATE_DIR = Path(".claude/state")
+# =============================================================================
+# SESSION DIRECTORY MANAGEMENT
+# =============================================================================
+
+# Session directory (set by agent on startup)
+_session_dir: Path = Path(".")
+
+
+def set_session_dir(session_dir: Path) -> None:
+    """Set the session directory for all paths."""
+    global _session_dir
+    _session_dir = session_dir
+    _session_dir.mkdir(parents=True, exist_ok=True)
+
+
+def get_session_dir() -> Path:
+    """Get current session directory."""
+    return _session_dir
+
+
+def get_state_dir() -> Path:
+    """Get state directory for current session."""
+    return _session_dir / "state"
+
+
+def get_tasks_file() -> Path:
+    """Get tasks file for current session."""
+    return _session_dir / "eval_tasks.json"
+
+
+def get_evaluation_dir() -> Path:
+    """Get evaluation output directory for current session."""
+    return _session_dir / "evaluation"
 
 
 @lru_cache(maxsize=1)
@@ -58,7 +89,7 @@ def search_traces(
     """
     client = get_client()
     traces = client.search_traces(
-        experiment_ids=[experiment_id],
+        locations=[experiment_id],
         filter_string=filter_string,
         max_results=max_results
     )
@@ -205,8 +236,9 @@ def save_state(key: str, data: Any) -> Path:
     Returns:
         Path to saved file
     """
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    path = STATE_DIR / f"{key}.json"
+    state_dir = get_state_dir()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / f"{key}.json"
     path.write_text(json.dumps(data, indent=2, default=str))
     logger.info(f"State saved: {path}")
     return path
@@ -221,7 +253,7 @@ def load_state(key: str) -> Optional[dict]:
     Returns:
         Loaded data or None if not found
     """
-    path = STATE_DIR / f"{key}.json"
+    path = get_state_dir() / f"{key}.json"
     if path.exists():
         return json.loads(path.read_text())
     return None
@@ -229,32 +261,40 @@ def load_state(key: str) -> Optional[dict]:
 
 def clear_state() -> None:
     """Clear all state files."""
-    if STATE_DIR.exists():
-        for f in STATE_DIR.glob("*.json"):
+    state_dir = get_state_dir()
+    if state_dir.exists():
+        for f in state_dir.glob("*.json"):
             f.unlink()
         logger.info("State cleared")
 
 
 def list_state_keys() -> list[str]:
     """List available state keys."""
-    if not STATE_DIR.exists():
+    state_dir = get_state_dir()
+    if not state_dir.exists():
         return []
-    return [f.stem for f in STATE_DIR.glob("*.json")]
+    return [f.stem for f in state_dir.glob("*.json")]
 
 
 # =============================================================================
 # TASK PROGRESS TRACKING (For autonomous mode)
 # =============================================================================
 
-TASKS_FILE = Path("eval_tasks.json")
-
 
 def get_task_status() -> dict:
     """Get current task status for progress tracking."""
-    if not TASKS_FILE.exists():
+    tasks_file = get_tasks_file()
+    if not tasks_file.exists():
         return {"total": 0, "completed": 0, "pending": 0, "failed": 0, "tasks": []}
 
-    tasks = json.loads(TASKS_FILE.read_text())
+    data = json.loads(tasks_file.read_text())
+
+    # Handle both formats: list or dict with "tasks" key
+    if isinstance(data, dict):
+        tasks = data.get("tasks", [])
+    else:
+        tasks = data
+
     return {
         "total": len(tasks),
         "completed": sum(1 for t in tasks if t.get("status") == "completed"),
@@ -266,9 +306,18 @@ def get_task_status() -> dict:
 
 def all_tasks_complete() -> bool:
     """Check if all tasks are complete."""
-    if not TASKS_FILE.exists():
+    tasks_file = get_tasks_file()
+    if not tasks_file.exists():
         return False
-    tasks = json.loads(TASKS_FILE.read_text())
+
+    data = json.loads(tasks_file.read_text())
+
+    # Handle both formats: list or dict with "tasks" key
+    if isinstance(data, dict):
+        tasks = data.get("tasks", [])
+    else:
+        tasks = data
+
     return len(tasks) > 0 and all(t.get("status") == "completed" for t in tasks)
 
 
@@ -294,7 +343,7 @@ def print_progress_summary() -> None:
         print(f"\n  Warning: {status['failed']} task(s) need fixes")
 
     # Show validation status if available
-    validation_file = STATE_DIR / "validation_results.json"
+    validation_file = get_state_dir() / "validation_results.json"
     if validation_file.exists():
         results = json.loads(validation_file.read_text())
         if results.get("script_success"):
@@ -315,7 +364,7 @@ def print_final_summary() -> None:
     print("=" * 50)
 
     print("\nGenerated Files:")
-    eval_dir = Path("evaluation")
+    eval_dir = get_evaluation_dir()
     for filename in ["eval_dataset.py", "scorers.py", "run_eval.py"]:
         path = eval_dir / filename
         if path.exists():
@@ -324,7 +373,7 @@ def print_final_summary() -> None:
             print(f"  [ ] {path} (not found)")
 
     # Show final validation status
-    validation_file = STATE_DIR / "validation_results.json"
+    validation_file = get_state_dir() / "validation_results.json"
     if validation_file.exists():
         results = json.loads(validation_file.read_text())
         print("\nValidation Status:")
@@ -332,7 +381,7 @@ def print_final_summary() -> None:
         print(f"  Scorers valid: {'Yes' if results.get('scorers_valid') else 'No'}")
 
     print("\nTo run evaluation:")
-    print("  python evaluation/run_eval.py")
+    print(f"  python {get_evaluation_dir()}/run_eval.py")
 
 
 # =============================================================================

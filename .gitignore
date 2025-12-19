@@ -215,3 +215,6 @@ __marimo__/
 
 # Agent cache files
 .claude/cache/
+
+# Session logs
+sessions/

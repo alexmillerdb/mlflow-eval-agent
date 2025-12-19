@@ -39,7 +39,7 @@ Evaluation-driven agent for analyzing and optimizing GenAI agents on Databricks.
 
 ## MCP Tools
 
-### In-Process MCP Server (mcp__mlflow-eval__)
+### In-Process MCP Server (mcp__mlflow-mcp__)
 
 All tools are served from a single in-process MCP server:
 

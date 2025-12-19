@@ -8,6 +8,7 @@ import json
 import logging
 from typing import Any
 
+import mlflow
 from claude_agent_sdk import tool
 
 from . import mlflow_ops
@@ -22,6 +23,7 @@ def create_tools() -> list:
         List of tool functions for the MCP server
     """
 
+    @mlflow.trace(name="tool_mlflow_query", span_type="TOOL")
     @tool(
         "mlflow_query",
         "Query MLflow traces. Operations: 'search' (find traces), 'get' (trace details), 'assessment' (get feedback/expectation).",
@@ -89,6 +91,7 @@ def create_tools() -> list:
             logger.exception(f"Error in mlflow_query: {operation}")
             return mlflow_ops.text_result(f"[MLflow] Error: {str(e)}")
 
+    @mlflow.trace(name="tool_mlflow_annotate", span_type="TOOL")
     @tool(
         "mlflow_annotate",
         "Annotate traces. Operations: 'tag' (set tag), 'feedback' (log assessment), 'expectation' (log ground truth).",
@@ -157,6 +160,7 @@ def create_tools() -> list:
             logger.exception(f"Error in mlflow_annotate: {operation}")
             return mlflow_ops.text_result(f"[MLflow] Error: {str(e)}")
 
+    @mlflow.trace(name="tool_save_findings", span_type="TOOL")
     @tool(
         "save_findings",
         "Save analysis findings to persistent JSON file. Use keys like 'analysis', 'recommendations', 'eval_cases'.",
