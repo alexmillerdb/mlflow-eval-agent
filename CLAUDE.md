@@ -1,6 +1,6 @@
 # MLflow Evaluation Agent
 
-Evaluation-driven agent for analyzing and optimizing GenAI agents on Databricks. Built with Claude Agent SDK using a coordinator + sub-agent architecture with inter-agent communication via shared workspace.
+Autonomous agent for analyzing MLflow traces and building evaluation suites. Built with Claude Agent SDK using a single agent with initializer/worker loop pattern.
 
 ## CRITICAL: Read Skills Before Writing Code
 
@@ -22,38 +22,22 @@ Evaluation-driven agent for analyzing and optimizing GenAI agents on Databricks.
 
 ## Architecture
 
-### Sub-Agents
+Single agent with autonomous loop:
 
-| Agent | Role | Writes to Workspace |
-|-------|------|---------------------|
-| `trace_analyst` | Deep trace analysis using MCP tools | `trace_analysis_summary`, `error_patterns`, `performance_metrics` |
-| `context_engineer` | Context optimization recommendations | `context_recommendations` |
-| `agent_architect` | Architecture analysis and improvements | Architecture tags on traces |
+1. **Initializer session** (`prompts/initializer.md`) - Analyzes traces, creates task plan
+2. **Worker sessions** (`prompts/worker.md`) - Executes one task per session, updates status
 
-### Workflow Order
-
-1. `trace_analyst` - Analyze production data first
-2. `context_engineer` - Reads trace findings, generates optimizations
-3. `agent_architect` - Reads all findings, provides structural recommendations
-4. Coordinator synthesizes and generates action plan
+State is persisted via JSON files in session directory. Each session runs with fresh context.
 
 ## MCP Tools
 
-### In-Process MCP Server (mcp__mlflow-mcp__)
+Three simplified tools served via in-process MCP server:
 
-All tools are served from a single in-process MCP server:
-
-**MLflow Trace Tools:**
-- `search_traces` - Find traces with filters
-- `get_trace` - Get detailed trace by ID (use `output_mode='aggressive'` for batch operations)
-- `set_trace_tag` / `delete_trace_tag` - Tag traces for dataset building
-- `log_feedback` - Store analysis findings on traces
-- `log_expectation` - Store ground truth for evaluation
-- `get_assessment` / `update_assessment` - Retrieve/modify assessments
-
-**Workspace Tools:**
-- `write_to_workspace` / `read_from_workspace` - Inter-agent communication
-- `check_workspace_dependencies` - Validate required data exists
+| Tool | Purpose |
+|------|---------|
+| `mlflow_query` | Search traces, get trace details, retrieve assessments |
+| `mlflow_annotate` | Set tags, log feedback, log expectations on traces |
+| `save_findings` | Persist analysis to session state files |
 
 ## Configuration
 
@@ -67,13 +51,22 @@ MLFLOW_EXPERIMENT_ID=123
 
 ## Running
 
+### Databricks (Recommended)
+
 ```bash
+# Deploy bundle
+databricks bundle deploy -t dev
+
+# Run notebook job
+databricks bundle run eval_agent_notebook -t dev
+```
+
+### Local
+
+```bash
+# Autonomous mode
+uv run python -m src.cli -a -e <experiment_id>
+
 # Interactive mode
-python src/agent.py -i
-
-# Single query
-python src/agent.py "Analyze traces from experiment 123"
-
-# Analyze with filter
-python src/agent.py --analyze "attributes.status = 'ERROR'"
+uv run python -m src.cli -i
 ```
