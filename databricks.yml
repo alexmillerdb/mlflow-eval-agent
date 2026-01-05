@@ -1,19 +1,162 @@
-# This is a Databricks asset bundle definition for mlflow-eval-agent.
-# The Databricks extension requires databricks.yml configuration file.
+# Databricks Asset Bundle for MLflow Evaluation Agent
+# Builds wheel with prompts and deploys job for autonomous evaluation.
 # See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
 
 bundle:
   name: mlflow-eval-agent
 
+# =============================================================================
+# VARIABLES - Configure these for your environment
+# =============================================================================
+variables:
+  # Target experiment to analyze
+  experiment_id:
+    description: "MLflow Experiment ID to analyze"
+    default: "2181280362153689"
+
+  # Unity Catalog Volume for session storage
+  volume_path:
+    description: "Unity Catalog Volume path for session storage"
+    default: "/Volumes/users/alex_miller/mlflow-eval-agent"
+
+  # Safety limit for autonomous mode
+  max_iterations:
+    description: "Maximum iterations for autonomous mode"
+    default: "50"
+
+  # Databricks FM API endpoint
+  anthropic_endpoint:
+    description: "Databricks serving endpoint for Anthropic models"
+    default: "https://e2-demo-field-eng.cloud.databricks.com/serving-endpoints/anthropic"
+
+  # Model selection
+  model:
+    description: "Model to use (databricks-claude-sonnet-4, databricks-claude-opus-4-5)"
+    default: "databricks-claude-opus-4-5"
+
+  # Secret scope for credentials
+  secret_scope:
+    description: "Databricks secret scope name"
+    default: "mlflow-eval"
+
+  # MLflow experiment for agent's own traces (separate from target experiment)
+  mlflow_agent_experiment_id:
+    description: "MLflow experiment ID for agent tracing"
+    default: "159502977489049"
+
+# =============================================================================
+# BUILD ARTIFACTS
+# =============================================================================
+artifacts:
+  mlflow_eval_agent:
+    type: whl
+    path: .
+    build: uv build
+
+# =============================================================================
+# JOB DEFINITIONS
+# =============================================================================
+resources:
+  jobs:
+    eval_agent_job:
+      name: "[${bundle.target}] MLflow Eval Agent"
+      description: "Autonomous agent for analyzing MLflow traces and building evaluation suites"
+
+      # Serverless environments - MUST be under job, not bundle
+      environments:
+        - environment_key: default
+          spec:
+            dependencies:
+              - ./dist/*.whl
+
+      # Serverless job tasks
+      tasks:
+        - task_key: run_autonomous
+          environment_key: default
+          max_retries: 1
+          python_wheel_task:
+            package_name: mlflow_eval_agent
+            entry_point: mlflow-eval
+            # Pass runtime configuration via flags instead of spark_env_vars
+            parameters:
+              - "--autonomous"
+              - "--max-iterations"
+              - "${var.max_iterations}"
+              - "--experiment-id"
+              - "${var.experiment_id}"
+              - "--volume-path"
+              - "${var.volume_path}"
+              - "--anthropic-base-url"
+              - "${var.anthropic_endpoint}"
+              - "--secret-scope"
+              - "${var.secret_scope}"
+              - "--secret-key"
+              - "databricks-token"
+              - "--anthropic-api-key"
+              - ""
+              - "--model"
+              - "${var.model}"
+              - "--claude-code-disable-experimental-betas"
+              - "1"
+              - "--mlflow-agent-experiment-id"
+              - "${var.mlflow_agent_experiment_id}"
+
+    # -------------------------------------------------------------------------
+    # Notebook Job - Interactive/Widget-based deployment
+    # -------------------------------------------------------------------------
+    eval_agent_notebook:
+      name: "[${bundle.target}] MLflow Eval Agent (Notebook)"
+      description: "Notebook-based agent with widget parameters for interactive use"
+
+      # Serverless environment
+      environments:
+        - environment_key: default
+          spec:
+            dependencies:
+              - ./dist/*.whl
+
+      tasks:
+        - task_key: run_eval
+          environment_key: default
+          max_retries: 1
+          notebook_task:
+            notebook_path: ${workspace.root_path}/files/notebooks/run_eval_agent
+            base_parameters:
+              experiment_id: "${var.experiment_id}"
+              volume_path: "${var.volume_path}"
+              max_iterations: "${var.max_iterations}"
+              model: "${var.model}"
+              agent_experiment_id: "${var.mlflow_agent_experiment_id}"
+              secret_scope: "${var.secret_scope}"
+              secret_key: "databricks-token"
+              anthropic_api_key: ""
+              disable_experimental_betas: "1"
+
+# =============================================================================
+# TARGET ENVIRONMENTS
+# =============================================================================
 targets:
   dev:
     mode: development
     default: true
     workspace:
       host: https://e2-demo-field-eng.cloud.databricks.com
+    variables:
+      max_iterations: "20"
+      experiment_id: "2181280362153689"
+      volume_path: "/Volumes/users/alex_miller/mlflow-eval-agent"
+      anthropic_endpoint: "https://e2-demo-field-eng.cloud.databricks.com/serving-endpoints/anthropic"
+      model: "databricks-claude-opus-4-5"
+      secret_scope: "mlflow-eval"
+      mlflow_agent_experiment_id: "159502977489049"
 
-  ## Optionally, there could be 'staging' or 'prod' targets here.
-  #
+  # Production target (template)
   # prod:
+  #   mode: production
   #   workspace:
-  #     host: https://e2-demo-field-eng.cloud.databricks.com
+  #     host: https://your-prod-workspace.cloud.databricks.com
+  #   variables:
+  #     experiment_id: "your-prod-experiment-id"
+  #     volume_path: "/Volumes/prod_catalog/prod_schema/mlflow-eval-agent"
+  #     max_iterations: "20"
+  #     anthropic_endpoint: "https://your-prod-workspace.cloud.databricks.com/serving-endpoints/anthropic"

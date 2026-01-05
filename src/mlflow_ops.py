@@ -30,7 +30,45 @@ def set_session_dir(session_dir: Path) -> None:
     """Set the session directory for all paths."""
     global _session_dir
     _session_dir = session_dir
+
+    # For UC volume paths, ensure volume exists before creating subdirectories
+    path_str = str(session_dir)
+    if path_str.startswith("/Volumes/"):
+        _ensure_volume_exists(path_str)
+
     _session_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_volume_exists(path: str) -> None:
+    """Create Unity Catalog volume if it doesn't exist.
+
+    UC volumes cannot be created with mkdir - they must be created via SQL.
+    Path format: /Volumes/<catalog>/<schema>/<volume>/...
+    """
+    parts = path.split("/")
+    if len(parts) < 5:
+        return  # Not a valid UC volume path
+
+    catalog, schema, volume = parts[2], parts[3], parts[4]
+    volume_path = Path(f"/Volumes/{catalog}/{schema}/{volume}")
+
+    if volume_path.exists():
+        logger.debug(f"UC volume exists: {volume_path}")
+        return
+
+    # Create volume using Spark SQL
+    logger.info(f"Creating Unity Catalog volume: {catalog}.{schema}.{volume}")
+    try:
+        from pyspark.sql import SparkSession
+        spark = SparkSession.builder.getOrCreate()
+        spark.sql(f"CREATE VOLUME IF NOT EXISTS `{catalog}`.`{schema}`.`{volume}`")
+        logger.info(f"Created Unity Catalog volume: {catalog}.{schema}.{volume}")
+    except Exception as e:
+        raise ValueError(
+            f"Unity Catalog Volume does not exist and could not be created: {volume_path}\n"
+            f"Error: {e}\n"
+            f"Create manually with: CREATE VOLUME {catalog}.{schema}.{volume}"
+        )
 
 
 def get_session_dir() -> Path:
@@ -322,66 +360,68 @@ def all_tasks_complete() -> bool:
 
 
 def print_progress_summary() -> None:
-    """Print current progress with validation status."""
+    """Log current progress with validation status."""
     status = get_task_status()
 
     if status["total"] == 0:
-        print("\nProgress: No tasks created yet (initializer session)")
+        logger.info("Progress: No tasks created yet (initializer session)")
         return
 
     pct = (status["completed"] / status["total"]) * 100
-    print(f"\nProgress: {status['completed']}/{status['total']} tasks ({pct:.0f}%)")
+    logger.info(f"Progress: {status['completed']}/{status['total']} tasks ({pct:.0f}%)")
 
     # Show task list
     for task in status["tasks"]:
         icon = {"completed": "[x]", "pending": "[ ]", "failed": "[!]"}.get(
             task.get("status", "pending"), "[ ]"
         )
-        print(f"  {icon} {task.get('name', 'Unknown task')}")
+        logger.info(f"  {icon} {task.get('name', 'Unknown task')}")
 
     if status["failed"] > 0:
-        print(f"\n  Warning: {status['failed']} task(s) need fixes")
+        logger.warning(f"  Warning: {status['failed']} task(s) need fixes")
 
     # Show validation status if available
     validation_file = get_state_dir() / "validation_results.json"
     if validation_file.exists():
         results = json.loads(validation_file.read_text())
-        if results.get("script_success"):
-            print("  [x] Eval script runs successfully")
-        else:
-            print("  [ ] Eval script has errors")
+        if isinstance(results, dict):
+            if results.get("script_success"):
+                logger.info("  [x] Eval script runs successfully")
+            else:
+                logger.info("  [ ] Eval script has errors")
 
-        if results.get("scorers_valid"):
-            print("  [x] All scorers returning valid results")
-        else:
-            print("  [ ] Some scorers have errors/NaN values")
+            if results.get("scorers_valid"):
+                logger.info("  [x] All scorers returning valid results")
+            else:
+                logger.info("  [ ] Some scorers have errors/NaN values")
 
 
 def print_final_summary() -> None:
-    """Print final summary when all tasks complete."""
-    print("\n" + "=" * 50)
-    print("  EVALUATION SETUP COMPLETE")
-    print("=" * 50)
+    """Log final summary when all tasks complete."""
+    logger.info("=" * 50)
+    logger.info("  EVALUATION SETUP COMPLETE")
+    logger.info("=" * 50)
 
-    print("\nGenerated Files:")
+    logger.info("Generated Files:")
     eval_dir = get_evaluation_dir()
     for filename in ["eval_dataset.py", "scorers.py", "run_eval.py"]:
         path = eval_dir / filename
         if path.exists():
-            print(f"  [x] {path}")
+            logger.info(f"  [x] {path}")
         else:
-            print(f"  [ ] {path} (not found)")
+            logger.info(f"  [ ] {path} (not found)")
 
     # Show final validation status
     validation_file = get_state_dir() / "validation_results.json"
     if validation_file.exists():
         results = json.loads(validation_file.read_text())
-        print("\nValidation Status:")
-        print(f"  Script runs: {'Yes' if results.get('script_success') else 'No'}")
-        print(f"  Scorers valid: {'Yes' if results.get('scorers_valid') else 'No'}")
+        if isinstance(results, dict):
+            logger.info("Validation Status:")
+            logger.info(f"  Script runs: {'Yes' if results.get('script_success') else 'No'}")
+            logger.info(f"  Scorers valid: {'Yes' if results.get('scorers_valid') else 'No'}")
 
-    print("\nTo run evaluation:")
-    print(f"  python {get_evaluation_dir()}/run_eval.py")
+    logger.info("To run evaluation:")
+    logger.info(f"  python {get_evaluation_dir()}/run_eval.py")
 
 
 # =============================================================================
