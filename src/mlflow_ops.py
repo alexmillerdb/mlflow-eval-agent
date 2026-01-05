@@ -384,15 +384,16 @@ def print_progress_summary() -> None:
     validation_file = get_state_dir() / "validation_results.json"
     if validation_file.exists():
         results = json.loads(validation_file.read_text())
-        if results.get("script_success"):
-            logger.info("  [x] Eval script runs successfully")
-        else:
-            logger.info("  [ ] Eval script has errors")
+        if isinstance(results, dict):
+            if results.get("script_success"):
+                logger.info("  [x] Eval script runs successfully")
+            else:
+                logger.info("  [ ] Eval script has errors")
 
-        if results.get("scorers_valid"):
-            logger.info("  [x] All scorers returning valid results")
-        else:
-            logger.info("  [ ] Some scorers have errors/NaN values")
+            if results.get("scorers_valid"):
+                logger.info("  [x] All scorers returning valid results")
+            else:
+                logger.info("  [ ] Some scorers have errors/NaN values")
 
 
 def print_final_summary() -> None:
@@ -414,9 +415,10 @@ def print_final_summary() -> None:
     validation_file = get_state_dir() / "validation_results.json"
     if validation_file.exists():
         results = json.loads(validation_file.read_text())
-        logger.info("Validation Status:")
-        logger.info(f"  Script runs: {'Yes' if results.get('script_success') else 'No'}")
-        logger.info(f"  Scorers valid: {'Yes' if results.get('scorers_valid') else 'No'}")
+        if isinstance(results, dict):
+            logger.info("Validation Status:")
+            logger.info(f"  Script runs: {'Yes' if results.get('script_success') else 'No'}")
+            logger.info(f"  Scorers valid: {'Yes' if results.get('scorers_valid') else 'No'}")
 
     logger.info("To run evaluation:")
     logger.info(f"  python {get_evaluation_dir()}/run_eval.py")

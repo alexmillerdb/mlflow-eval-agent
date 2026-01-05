@@ -91,6 +91,10 @@ Examples:
         if value is not None:
             os.environ[env_var] = value
 
+    # Initialize MLflow AFTER env vars are set (critical for experiment tracing)
+    from .agent import setup_mlflow
+    setup_mlflow()
+
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 

@@ -22,20 +22,40 @@ from pathlib import Path
 from typing import AsyncIterator, Optional
 
 # =============================================================================
-# MLFLOW SETUP - Must happen BEFORE importing mlflow.anthropic
-# The mlflow.anthropic import triggers tracking initialization, so we must
-# set tracking_uri first to avoid defaulting to local SQLite.
+# MLFLOW SETUP - Deferred to setup_mlflow() function
+# Must be called AFTER CLI args are processed and env vars are set.
 # =============================================================================
 import mlflow
-from .config import Config
 
-_config = Config.from_env(validate=False)  # Don't validate - may not have all env vars
-mlflow.set_tracking_uri(_config.tracking_uri)
-if _config.agent_experiment_id:
-    mlflow.set_experiment(experiment_id=_config.agent_experiment_id)
+_mlflow_initialized = False
 
-import mlflow.anthropic  # Now imports with correct tracking URI
-mlflow.anthropic.autolog()
+
+def setup_mlflow():
+    """Initialize MLflow tracking. Must be called after env vars are set.
+
+    This function is called from cli.py after CLI args are mapped to env vars.
+    The mlflow.anthropic import triggers tracking initialization, so we must
+    set tracking_uri first to avoid defaulting to local SQLite.
+    """
+    global _mlflow_initialized
+    if _mlflow_initialized:
+        return
+
+    import mlflow as _mlflow  # Local import to avoid scoping issues
+    import mlflow.anthropic as mlflow_anthropic
+
+    from .config import Config
+    config = Config.from_env(validate=False)
+
+    _mlflow.set_tracking_uri(config.tracking_uri)
+    if config.agent_experiment_id:
+        _mlflow.set_experiment(experiment_id=config.agent_experiment_id)
+        logging.info(f"MLflow experiment set to: {config.agent_experiment_id}")
+
+    mlflow_anthropic.autolog()
+
+    _mlflow_initialized = True
+
 
 # =============================================================================
 
@@ -289,6 +309,7 @@ async def run_autonomous(
         get_tasks_file,
     )
     from .runtime import get_sessions_base_path
+    from .config import Config
 
     config = Config.from_env()
     config.experiment_id = experiment_id
