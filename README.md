@@ -136,7 +136,3 @@ mlflow-eval-agent/
 │   └── worker.md         # Subsequent session prompt
 └── databricks.yml        # Asset Bundle config
 ```
-
-## License
-
-MIT
