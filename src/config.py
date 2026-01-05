@@ -47,9 +47,18 @@ class Config:
             pass  # dotenv optional
 
         # Generate session ID if not provided
+        # Uses job context for Databricks Jobs, timestamp otherwise
+        from .runtime import detect_runtime
+
         session_id = os.getenv("SESSION_ID", "")
         if not session_id:
-            session_id = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            runtime = detect_runtime()
+            if runtime.session_prefix:
+                # Databricks Job: use job-{id}-run-{id} format
+                session_id = runtime.session_prefix
+            else:
+                # Local: use timestamp format
+                session_id = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
         config = cls(
             databricks_host=os.getenv("DATABRICKS_HOST", ""),
@@ -58,7 +67,7 @@ class Config:
             experiment_id=os.getenv("MLFLOW_EXPERIMENT_ID", ""),
             agent_experiment_id=os.getenv("MLFLOW_AGENT_EXPERIMENT_ID", ""),
             tracking_uri=os.getenv("MLFLOW_TRACKING_URI", "databricks"),
-            model=os.getenv("DABS_MODEL", "sonnet"),
+            model=os.getenv("MODEL", "databricks-claude-opus-4-5"),
             session_id=session_id,
         )
 
@@ -69,7 +78,15 @@ class Config:
 
     def validate(self) -> None:
         """Validate required configuration."""
-        # Either config profile or host+token required
+        from .runtime import detect_runtime
+
+        runtime = detect_runtime()
+
+        # Skip Databricks auth check when running inside Databricks (auth is automatic)
+        if runtime.is_databricks:
+            return
+
+        # Local mode requires explicit credentials
         if not self.databricks_config_profile and not self.databricks_host:
             raise ValueError(
                 "Configuration error: Set DATABRICKS_CONFIG_PROFILE or DATABRICKS_HOST"

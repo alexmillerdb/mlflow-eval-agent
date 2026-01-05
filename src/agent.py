@@ -14,6 +14,7 @@ Supports two modes:
 """
 
 import asyncio
+import importlib.resources
 import logging
 import time
 from dataclasses import dataclass
@@ -55,21 +56,50 @@ from .tools import create_tools, MCPTools, BuiltinTools
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Paths
-PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
-
-
 # =============================================================================
 # PROMPT LOADING
 # =============================================================================
 
+def _get_prompts_dir() -> Path:
+    """Get prompts directory, works both installed and in dev.
+
+    When installed as a wheel, uses importlib.resources.
+    In development, falls back to relative path.
+    """
+    # Try package resources first (installed wheel)
+    try:
+        files = importlib.resources.files("prompts")
+        # Check if it's a real directory we can use
+        with importlib.resources.as_file(files) as prompts_path:
+            if prompts_path.is_dir():
+                return prompts_path
+    except (TypeError, FileNotFoundError, ModuleNotFoundError):
+        pass
+
+    # Fallback to relative path (development)
+    return Path(__file__).parent.parent / "prompts"
+
+
 @mlflow.trace
 def load_prompt(name: str = "system") -> str:
-    """Load external prompt from prompts/ directory."""
-    path = PROMPTS_DIR / f"{name}.md"
+    """Load external prompt from prompts/ directory.
+
+    Works both when installed as a wheel and in development mode.
+    """
+    # Try importlib.resources first for installed package
+    try:
+        files = importlib.resources.files("prompts")
+        prompt_file = files.joinpath(f"{name}.md")
+        return prompt_file.read_text()
+    except (TypeError, FileNotFoundError, ModuleNotFoundError):
+        pass
+
+    # Fallback to relative path (development)
+    path = Path(__file__).parent.parent / "prompts" / f"{name}.md"
     if path.exists():
         return path.read_text()
-    logger.warning(f"Prompt file not found: {path}")
+
+    logger.warning(f"Prompt file not found: {name}.md")
     return ""
 
 
@@ -238,7 +268,6 @@ class MLflowAgent:
 # =============================================================================
 
 AUTO_CONTINUE_DELAY_SECONDS = 3
-SESSIONS_DIR = Path("sessions")
 
 
 @mlflow.trace(name="autonomous_evaluation", span_type="AGENT")
@@ -259,25 +288,27 @@ async def run_autonomous(
         set_session_dir,
         get_tasks_file,
     )
+    from .runtime import get_sessions_base_path
 
     config = Config.from_env()
     config.experiment_id = experiment_id
 
-    # Set up session directory
-    session_dir = SESSIONS_DIR / config.session_id
+    # Set up session directory (uses Volume in Databricks, local otherwise)
+    sessions_base = get_sessions_base_path()
+    session_dir = sessions_base / config.session_id
     set_session_dir(session_dir)
 
-    print(f"\nSession: {config.session_id}")
-    print(f"Output:  {session_dir}")
+    logger.info(f"Session: {config.session_id}")
+    logger.info(f"Output:  {session_dir}")
 
     # Check if first run (no task file exists in this session)
     is_first_run = not get_tasks_file().exists()
 
     if is_first_run:
-        print("\n" + "=" * 60)
-        print("  INITIALIZER SESSION")
-        print("  Analyzing traces and creating task plan...")
-        print("=" * 60 + "\n")
+        logger.info("=" * 60)
+        logger.info("  INITIALIZER SESSION")
+        logger.info("  Analyzing traces and creating task plan...")
+        logger.info("=" * 60)
 
     iteration = 0
     while True:
@@ -285,7 +316,7 @@ async def run_autonomous(
 
         # Check iteration limit
         if max_iterations and iteration > max_iterations:
-            print(f"\nReached max iterations ({max_iterations}). Stopping.")
+            logger.info(f"Reached max iterations ({max_iterations}). Stopping.")
             break
 
         # Check if all tasks complete
@@ -310,7 +341,7 @@ async def run_autonomous(
             # After first run, switch to worker mode
             is_first_run = False
 
-            print(f"\n--- Session {iteration} ({prompt_name}) ---\n")
+            logger.info(f"--- Session {iteration} ({prompt_name}) ---")
 
             # Run session and stream output
             try:
@@ -319,34 +350,41 @@ async def run_autonomous(
                         # Print incremental text (clear line and reprint for streaming effect)
                         pass  # Text is accumulated in result.response
 
-                # Print final response
+                # Log final response
                 if result and result.response:
-                    print(result.response)
+                    logger.info(f"Response:\n{result.response}")
                     iter_span.set_attribute("response_length", len(result.response))
 
                     # Show cost if available
                     if result.cost_usd:
-                        print(f"\n[Cost: ${result.cost_usd:.4f}]")
+                        logger.info(f"[Cost: ${result.cost_usd:.4f}]")
                         iter_span.set_attribute("cost_usd", result.cost_usd)
 
             except KeyboardInterrupt:
                 iter_span.set_attribute("status", "interrupted")
-                print("\n\nInterrupted by user.")
+                logger.info("Interrupted by user.")
                 break
             except Exception as e:
                 iter_span.set_attribute("error", str(e))
-                print(f"\nError in session: {e}")
+                logger.error(f"Error in session: {e}")
                 logger.exception("Session error")
 
         # Progress summary
         print_progress_summary()
 
         # Auto-continue with interrupt window
-        print(f"\nContinuing in {AUTO_CONTINUE_DELAY_SECONDS}s (Ctrl+C to stop)...")
+        from .runtime import detect_runtime, RuntimeContext
+        runtime = detect_runtime()
+
+        if runtime.context == RuntimeContext.LOCAL:
+            logger.info(f"Continuing in {AUTO_CONTINUE_DELAY_SECONDS}s (Ctrl+C to stop)...")
+        else:
+            logger.info(f"Continuing in {AUTO_CONTINUE_DELAY_SECONDS}s...")
+
         try:
             await asyncio.sleep(AUTO_CONTINUE_DELAY_SECONDS)
         except KeyboardInterrupt:
-            print("\n\nStopped by user.")
+            logger.info("Stopped by user.")
             break
 
 

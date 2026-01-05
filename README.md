@@ -99,7 +99,7 @@ MLFLOW_TRACKING_URI=databricks              # Default: databricks
 ANTHROPIC_BASE_URL=https://your-workspace.cloud.databricks.com/serving-endpoints/anthropic
 ANTHROPIC_AUTH_TOKEN=dapi...
 ANTHROPIC_API_KEY=""
-DABS_MODEL=databricks-claude-opus-4-5
+MODEL=databricks-claude-opus-4-5
 CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1
 
 
@@ -116,7 +116,7 @@ DATABRICKS_CLUSTER_ID=                      # For classic compute
 | `MLFLOW_EXPERIMENT_ID` | Recommended | Target experiment to analyze |
 | `MLFLOW_AGENT_EXPERIMENT_ID` | No | Experiment for agent's own traces (debugging) |
 | `MLFLOW_TRACKING_URI` | No | MLflow server (default: `databricks`) |
-| `DABS_MODEL` | No | Model to use (default: `sonnet`) |
+| `MODEL` | No | Model to use (default: `sonnet`) |
 
 *One of `DATABRICKS_TOKEN` or `DATABRICKS_CONFIG_PROFILE` is required.
 
