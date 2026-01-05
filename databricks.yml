@@ -73,6 +73,7 @@ resources:
       tasks:
         - task_key: run_autonomous
           environment_key: default
+          max_retries: 1
           python_wheel_task:
             package_name: mlflow_eval_agent
             entry_point: mlflow-eval
@@ -99,6 +100,37 @@ resources:
               - "1"
               - "--mlflow-agent-experiment-id"
               - "${var.mlflow_agent_experiment_id}"
+
+    # -------------------------------------------------------------------------
+    # Notebook Job - Interactive/Widget-based deployment
+    # -------------------------------------------------------------------------
+    eval_agent_notebook:
+      name: "[${bundle.target}] MLflow Eval Agent (Notebook)"
+      description: "Notebook-based agent with widget parameters for interactive use"
+
+      # Serverless environment
+      environments:
+        - environment_key: default
+          spec:
+            dependencies:
+              - ./dist/*.whl
+
+      tasks:
+        - task_key: run_eval
+          environment_key: default
+          max_retries: 1
+          notebook_task:
+            notebook_path: ${workspace.root_path}/files/notebooks/run_eval_agent
+            base_parameters:
+              experiment_id: "${var.experiment_id}"
+              volume_path: "${var.volume_path}"
+              max_iterations: "${var.max_iterations}"
+              model: "${var.model}"
+              agent_experiment_id: "${var.mlflow_agent_experiment_id}"
+              secret_scope: "${var.secret_scope}"
+              secret_key: "databricks-token"
+              anthropic_api_key: ""
+              disable_experimental_betas: "1"
 
 # =============================================================================
 # TARGET ENVIRONMENTS
