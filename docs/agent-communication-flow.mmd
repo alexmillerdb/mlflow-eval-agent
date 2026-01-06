@@ -1,60 +1,61 @@
 sequenceDiagram
     participant User
-    participant Coordinator as Coordinator Agent
-    participant Task as Task Tool
-    participant TA as trace_analyst
-    participant CE as context_engineer
-    participant AA as agent_architect
-    participant WS as Shared Workspace
-    participant MCP as MLflow MCP Server
+    participant CLI as CLI (src/cli.py)
+    participant Agent as MLflowAgent
     participant Skills as Skills Layer
+    participant MCP as MCP Tools
+    participant State as Session State Files
+    participant MLflow as MLflow API
 
-    User->>Coordinator: "Analyze my RAG agent's traces"
-    Coordinator->>Coordinator: Build options & load skills
-    Coordinator->>Skills: Load mlflow-evaluation, trace-analysis skills
-    Skills-->>Coordinator: Skill patterns loaded
+    User->>CLI: uv run python -m src.cli -a -e 123
+    CLI->>CLI: Setup MLflow tracking
 
-    Note over Coordinator: Phase 1: Trace Analysis
-    Coordinator->>Task: Delegate trace analysis
-    Task->>TA: Analyze production traces
-    TA->>MCP: search_traces(filter_string)
-    MCP-->>TA: Return trace results
-    TA->>MCP: get_trace(trace_id) [for each]
-    MCP-->>TA: Return trace details
-    TA->>TA: Classify errors, profile latency
-    TA->>WS: write("trace_analysis_summary", findings)
-    TA->>WS: write("error_patterns", errors)
-    TA->>WS: write("performance_metrics", metrics)
-    TA-->>Task: Analysis complete
-    Task-->>Coordinator: trace_analyst results
+    Note over Agent: Session 1: Initializer
+    CLI->>Agent: Create agent (prompt=initializer)
+    Agent->>Skills: Load mlflow-evaluation skill
+    Skills-->>Agent: GOTCHAS, patterns, interfaces
+    Agent->>MCP: mlflow_query(search, experiment_id)
+    MCP->>MLflow: search_traces()
+    MLflow-->>MCP: Trace results
+    MCP-->>Agent: Formatted traces
+    Agent->>MCP: mlflow_query(get, trace_id)
+    MCP->>MLflow: get_trace()
+    MLflow-->>MCP: Trace details
+    MCP-->>Agent: Trace with spans
+    Agent->>Agent: Analyze patterns, identify scorers
+    Agent->>MCP: save_findings(analysis, data)
+    MCP->>State: Write state/analysis.json
+    Agent->>State: Write eval_tasks.json
+    Agent-->>CLI: Session 1 complete
 
-    Note over Coordinator: Phase 2: Context Engineering
-    Coordinator->>Task: Delegate context optimization
-    Task->>CE: Identify quality issues
-    CE->>WS: read("trace_analysis_summary")
-    WS-->>CE: Return trace findings
-    CE->>Skills: Load context-engineering patterns
-    Skills-->>CE: Context optimization patterns
-    CE->>CE: Analyze context rot, token usage
-    CE->>WS: write("context_recommendations", recommendations)
-    CE-->>Task: Recommendations ready
-    Task-->>Coordinator: context_engineer results
+    Note over Agent: Session 2: Worker (dataset)
+    CLI->>Agent: Create agent (prompt=worker)
+    Agent->>State: Read eval_tasks.json
+    State-->>Agent: Task list (dataset pending)
+    Agent->>State: Read state/analysis.json
+    State-->>Agent: Analysis findings
+    Agent->>Skills: Load mlflow-evaluation skill
+    Agent->>Agent: Generate eval_dataset.py
+    Agent->>State: Write evaluation/eval_dataset.py
+    Agent->>State: Update eval_tasks.json
+    Agent-->>CLI: Session 2 complete
 
-    Note over Coordinator: Phase 3: Architecture Analysis
-    Coordinator->>Task: Delegate architecture review
-    Task->>AA: Analyze agent structure
-    AA->>WS: read("trace_analysis_summary")
-    AA->>WS: read("context_recommendations")
-    WS-->>AA: Return all findings
-    AA->>MCP: set_trace_tag(trace_id, "architecture_issue")
-    MCP-->>AA: Tag set
-    AA-->>Task: Architecture insights
-    Task-->>Coordinator: agent_architect results
+    Note over Agent: Session 3: Worker (scorer)
+    CLI->>Agent: Create agent (prompt=worker)
+    Agent->>State: Read eval_tasks.json
+    Agent->>Agent: Generate scorers.py
+    Agent->>State: Write evaluation/scorers.py
+    Agent-->>CLI: Session 3 complete
 
-    Note over Coordinator: Phase 4: Synthesis & Output
-    Coordinator->>WS: read all workspace data
-    WS-->>Coordinator: Complete findings
-    Coordinator->>Skills: Load eval script templates
-    Skills-->>Coordinator: Scorer patterns, dataset formats
-    Coordinator->>Coordinator: Generate evaluation script
-    Coordinator-->>User: Evaluation suite + recommendations
+    Note over Agent: Session 4: Worker (script)
+    CLI->>Agent: Create agent (prompt=worker)
+    Agent->>Agent: Generate run_eval.py
+    Agent->>State: Write evaluation/run_eval.py
+    Agent-->>CLI: Session 4 complete
+
+    Note over Agent: Session 5: Worker (validate)
+    CLI->>Agent: Create agent (prompt=worker)
+    Agent->>Agent: Run evaluation script
+    Agent->>State: Write state/validation_results.json
+    Agent-->>CLI: All tasks complete
+    CLI-->>User: Evaluation suite ready
