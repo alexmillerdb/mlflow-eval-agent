@@ -99,6 +99,39 @@ Or run interactively:
 
 **Session isolation**: Each iteration runs with fresh context. State is persisted via JSON files in the Unity Catalog Volume, allowing the agent to pick up where it left off.
 
+### Agent Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Agent as Agent (Claude)
+    participant Skills as Skills
+    participant Tools as Tools
+    participant State as Memory
+    participant MLflow
+
+    User->>Agent: Generate evaluation suite
+
+    Note over Agent: Session 1: Analyze
+    Agent->>Skills: Load evaluation patterns
+    Agent->>Tools: Query traces
+    Tools->>MLflow: search_traces()
+    MLflow-->>Agent: Production traces
+    Agent->>Agent: Identify test cases & scorers
+    Agent->>State: Save analysis + task plan
+
+    Note over Agent: Sessions 2-4: Generate
+    Agent->>State: Read next task
+    Agent->>Skills: Load code patterns
+    Agent->>Agent: Generate artifact
+    Agent->>State: Write code file
+
+    Note over Agent: Session 5: Validate
+    Agent->>Agent: Run evaluation
+    Agent->>State: Save results
+    Agent-->>User: Evaluation suite ready
+```
+
 ## Alternative: Wheel Job
 
 For CI/automation, use the wheel-based job instead:
