@@ -35,21 +35,25 @@ databricks secrets put-secret mlflow-eval databricks-token --string-value "dapi.
 
 ### Step 2: Configure Variables
 
-Edit `databricks.yml` to set your workspace-specific values:
+Edit `databricks.yml` or pass as job parameters:
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `experiment_id` | MLflow experiment containing traces to analyze | `"123456789"` |
+| `volume_path` | Unity Catalog Volume for session storage | `"/Volumes/catalog/schema/mlflow-eval-agent"` |
+| `mlflow_agent_experiment_id` | Where the agent logs its own traces | `"987654321"` |
 
 ```yaml
+# databricks.yml
 variables:
   experiment_id:
-    default: "YOUR_EXPERIMENT_ID"        # MLflow experiment to analyze
-
+    default: "YOUR_EXPERIMENT_ID"
   volume_path:
     default: "/Volumes/YOUR_CATALOG/YOUR_SCHEMA/mlflow-eval-agent"
-
   mlflow_agent_experiment_id:
-    default: "YOUR_AGENT_TRACES_EXPERIMENT"  # Where agent logs its own traces
-
+    default: "YOUR_AGENT_TRACES_EXPERIMENT"
   secret_scope:
-    default: "mlflow-eval"               # Secret scope from Step 1
+    default: "mlflow-eval"
 ```
 
 ### Step 3: Deploy Bundle
