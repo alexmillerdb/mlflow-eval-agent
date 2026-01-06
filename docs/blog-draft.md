@@ -152,6 +152,8 @@ The framework follows [Anthropic's research on effective harnesses for long-runn
 
 An agent harness is the orchestration layer that wraps an LLM to manage what the model can't handle itself—session boundaries, state persistence, task decomposition, and graceful recovery from failures. Rather than asking a model to "do everything at once," a harness breaks work into bounded sessions with checkpointed state.
 
+![Agent harness flow showing sessions, tools, and state](./agent-flow-simplified.png)
+
 ### Built on Claude Agent SDK
 
 The framework is built using the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-sdk), Anthropic's framework for building autonomous agents that can use tools, maintain state across sessions, and execute multi-step tasks.
