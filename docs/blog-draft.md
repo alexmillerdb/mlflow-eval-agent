@@ -1,6 +1,6 @@
 # Autonomous Evaluation Generation for AI Agents on Databricks
 
-*A framework that turns production traces into runnable MLflow evaluation suites*
+*A framework that turns MLflow traces into runnable MLflow evaluation suites*
 
 ---
 
@@ -9,7 +9,7 @@
 Databricks has made it straightforward to deploy AI agents—Model Serving endpoints, automatic tracing, Unity Catalog integration. But there's a gap between "deployed" and "production-ready":
 
 **You have:**
-- Agent code running on a serving endpoint
+- Agent code running on a serving endpoint or locally tested
 - Traces accumulating in MLflow
 - Users hitting the endpoint
 
@@ -20,7 +20,7 @@ Databricks has made it straightforward to deploy AI agents—Model Serving endpo
 
 MLflow 3's GenAI evaluation framework provides the primitives—scorers, datasets, evaluation runs—but assembling them manually doesn't scale. You need dozens of test cases, domain-specific scorers, and scripts that actually run against your Databricks environment.
 
-**This framework automates that assembly.** It analyzes your production traces, generates evaluation datasets, creates custom scorers, and outputs runnable MLflow evaluation scripts—all targeting your Databricks workspace.
+**This framework automates that assembly.** It analyzes traces from MLflow experiments, generates evaluation datasets, creates custom scorers, and outputs runnable MLflow evaluation scripts—all targeting your Databricks workspace.
 
 ---
 
@@ -36,9 +36,9 @@ Building an agent that works in demos is straightforward. Building one that work
 | **Iteration** | "I think this is better" | Measured improvement (or regression) |
 | **Monitoring** | "Users are complaining" | Automated quality gates |
 
-Production-grade agent systems like Claude Code treat evaluation as foundational infrastructure, not an afterthought. Every change is measured against established baselines. Regressions are caught before users encounter them.
+Production-grade agent systems treat evaluation as foundational infrastructure, not an afterthought. Every change is measured against established baselines. Regressions are caught before users encounter them.
 
-**The gap this framework addresses**: MLflow provides the evaluation primitives. Your traces contain the ground truth. But connecting them—building datasets from production patterns, creating domain-specific scorers, wiring up runnable scripts—takes days of manual work. This framework compresses that to hours.
+**Where this framework bridges the gap**: While MLflow supplies the tools for evaluation and MLflow traces offer comprehensive insight into agent behavior, assembling practical evaluation suites is still a manual, time-consuming task. Collecting patterns, crafting domain-specific scorers, and preparing runnable scripts can take days. This framework automates that entire process, transforming hours of setup into just minutes.
 
 ---
 
@@ -117,13 +117,13 @@ The framework generates three artifacts from your production traces:
 
 The framework supports three strategies based on what you have:
 
-| Strategy | When to Use | predict_fn needed? |
+| Strategy | When to Use | Predict function (predict_fn) needed? |
 |----------|-------------|-------------------|
 | **From Traces** | Have production traces, no agent code access | No — outputs pre-computed |
 | **Manual** | Need curated edge cases, have agent callable | Yes — calls agent at eval time |
 | **Hybrid** | Best coverage | Both approaches combined |
 
-Most deployments use "From Traces"—evaluating the quality of responses your agent has already produced in production.
+Most deployments use "From Traces"—evaluating the quality of responses your agent has already produced while developing or in production.
 
 ### A Starting Point, Not a Replacement
 
@@ -144,11 +144,13 @@ The goal is an **iterative loop**: traces → generated evaluation → human rev
 
 ---
 
-## Section 4: Architecture — Session-Based Generation
+## Section 4: Architecture — The Agent Harness Pattern
 
 Long-running generation tasks fail in predictable ways: agents try to do everything at once, lose context mid-task, or declare victory prematurely.
 
 The framework follows [Anthropic's research on effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents): separate initialization from incremental execution, with each session getting fresh context but shared state.
+
+An agent harness is the orchestration layer that wraps an LLM to manage what the model can't handle itself—session boundaries, state persistence, task decomposition, and graceful recovery from failures. Rather than asking a model to "do everything at once," a harness breaks work into bounded sessions with checkpointed state.
 
 ### Built on Claude Agent SDK
 
@@ -215,7 +217,7 @@ The session-based architecture makes this framework ideal for Databricks Jobs ra
 | **Execution** | Requires attention | Runs unattended |
 | **Failure recovery** | Manual restart | Automatic retry from file state |
 | **Scheduling** | Manual trigger | Scheduled or triggered |
-| **Monitoring** | Watch output | Job UI, alerts |
+| **Monitoring** | Watch output | Job UI, alerts, MLflow traces |
 
 Each session reads state from files and writes results back—the agent can restart cleanly from any failure point. Job retries "just work" because sessions are designed to resume from persisted state.
 
@@ -605,7 +607,7 @@ Results flow back to MLflow—tracked, comparable, integrated with your existing
 
 | Aspect | Manual Approach | This Framework |
 |--------|-----------------|----------------|
-| Time to first evaluation suite | 2-3 days | < 2 hours |
+| Time to first evaluation suite | 1-3 days | < 2 hours |
 | Test cases derived from production | Rarely done | Standard |
 | Scorers that compile on first run | ~60% | >95% |
 | Coverage of actual failure modes | Ad-hoc | Systematic |
