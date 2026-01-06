@@ -24,6 +24,24 @@ MLflow 3's GenAI evaluation framework provides the primitives—scorers, dataset
 
 ---
 
+## Why Evaluation Matters for Production Agents
+
+Building an agent that works in demos is straightforward. Building one that works reliably in production—handling edge cases, maintaining quality over time, and improving with each iteration—requires systematic evaluation.
+
+**The challenge for AI Engineers:**
+
+| Phase | Without Evaluation | With Evaluation |
+|-------|-------------------|-----------------|
+| **Development** | "It seems to work" | Quantified quality baselines |
+| **Iteration** | "I think this is better" | Measured improvement (or regression) |
+| **Monitoring** | "Users are complaining" | Automated quality gates |
+
+Production-grade agent systems like Claude Code treat evaluation as foundational infrastructure, not an afterthought. Every change is measured against established baselines. Regressions are caught before users encounter them.
+
+**The gap this framework addresses**: MLflow provides the evaluation primitives. Your traces contain the ground truth. But connecting them—building datasets from production patterns, creating domain-specific scorers, wiring up runnable scripts—takes days of manual work. This framework compresses that to hours.
+
+---
+
 ## Section 2: What MLflow 3 GenAI Evaluation Makes Possible
 
 Before diving into the framework, it's worth understanding what MLflow 3 brings to the table.
@@ -107,6 +125,23 @@ The framework supports three strategies based on what you have:
 
 Most deployments use "From Traces"—evaluating the quality of responses your agent has already produced in production.
 
+### A Starting Point, Not a Replacement
+
+This framework doesn't fully automate evaluation—and that's intentional. Evaluation requires human judgment about what matters for your specific use case.
+
+**What the framework provides:**
+- A strong starting point derived from production behavior
+- Patterns you might not have noticed manually
+- Working code that runs immediately
+
+**What you still need to do:**
+- Review and refine generated test cases
+- Adjust scorer guidelines to match your requirements
+- Add edge cases the production traces haven't encountered yet
+- Iterate based on evaluation results
+
+The goal is an **iterative loop**: traces → generated evaluation → human review → improved evaluation → better agent → new traces. Each cycle improves coverage.
+
 ---
 
 ## Section 4: Architecture — Session-Based Generation
@@ -114,6 +149,21 @@ Most deployments use "From Traces"—evaluating the quality of responses your ag
 Long-running generation tasks fail in predictable ways: agents try to do everything at once, lose context mid-task, or declare victory prematurely.
 
 The framework follows [Anthropic's research on effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents): separate initialization from incremental execution, with each session getting fresh context but shared state.
+
+### Built on Claude Agent SDK
+
+The framework is built using the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-sdk), Anthropic's framework for building autonomous agents that can use tools, maintain state across sessions, and execute multi-step tasks.
+
+**Why Claude Agent SDK?**
+
+| Capability | How It's Used |
+|------------|---------------|
+| **Tool Integration** | MCP tools for MLflow queries, annotations, state persistence |
+| **Session Management** | Fresh context per session with file-based state handoff |
+| **Skills System** | Load verified API patterns before generating code |
+| **Streaming** | Real-time output as the agent works |
+
+**Databricks Integration**: The agent runs Claude Opus 4.5 via Databricks Foundation Model API, keeping all inference within your workspace. Skills files and prompts are loaded from Unity Catalog Volumes, making the entire system self-contained on Databricks infrastructure.
 
 ### Architecture Overview
 
@@ -192,6 +242,46 @@ From a real analysis of a multi-agent orchestrator:
 
 This analysis drives scorer creation. The framework identified suboptimal routing in production traces, so it generates an `efficient_routing` scorer specifically targeting that issue.
 
+### Initializer Session Output
+
+Here's what the initializer session produces after analyzing traces:
+
+---
+
+**Agent Understanding:**
+- **Type**: Multi-Agent Supervisor (LangGraph-based)
+- **Purpose**: Orchestrates specialized "Genie" agents to answer business intelligence queries
+- **Domains**: Sales pipeline (`customer_sales`) and Supply chain (`supply_chain`)
+- **Model**: Claude 3.7 Sonnet via Databricks
+- **I/O**: Takes `{query: "..."}`, returns `{response: "..."}` with markdown tables
+
+**Evaluation Dimensions Identified:**
+
+| Scorer | Type | Rationale |
+|--------|------|-----------|
+| Safety | Builtin | Required baseline - no harmful content |
+| RelevanceToQuery | Builtin | Responses must address business questions |
+| correct_routing | Guidelines | Route to appropriate Genie based on query type |
+| efficient_routing | Guidelines | Don't call unnecessary Genies |
+| data_presentation | Guidelines | Tables must be clear and well-formatted |
+| error_handling | Custom | Validate error response structure |
+
+**Dataset Strategy**: `traces` (no predict_fn needed)
+- Extract inputs AND outputs from existing production traces
+- Evaluate pre-computed responses directly
+
+**Task Plan Created** (`eval_tasks.json`):
+1. Build evaluation dataset - Extract from 5 sample traces
+2. Create scorers - 6 scorers (2 builtin, 3 guidelines, 1 custom)
+3. Generate eval script - `mlflow.genai.evaluate()` with pre-computed outputs
+4. Run and validate - Execute and verify metrics logged
+
+**Output Files:**
+- [x] `eval_tasks.json` - Task list for worker sessions
+- [x] `state/analysis.json` - Trace analysis with 20 OK, 5 ERROR traces
+
+---
+
 ---
 
 ## Section 5: What Gets Generated
@@ -245,6 +335,36 @@ EVAL_DATA = [
     # ... more test cases
 ]
 ```
+
+### Worker Session Output (Scorer Creation)
+
+Each worker session completes one task. Here's the scorer creation task:
+
+| Scorer | Type | Purpose |
+|--------|------|---------|
+| `Safety()` | Built-in | Check for harmful content |
+| `RelevanceToQuery()` | Built-in | Check if response addresses the query |
+| `correct_routing` | Guidelines | Verify correct domain routing |
+| `efficient_routing` | Guidelines | Ensure no unnecessary cross-domain calls |
+| `data_presentation` | Guidelines | Check table formatting quality |
+| `error_handling` | Custom @scorer | Validate error response structure |
+
+### Final Results
+
+After 6 sessions (1 initializer + 5 workers), all tasks completed:
+
+| Scorer | Mean Score |
+|--------|------------|
+| safety | 1.000 |
+| relevance_to_query | 0.750 |
+| correct_routing | 0.750 |
+| efficient_routing | 1.000 |
+| data_presentation | 1.000 |
+| error_handling | 1.000 |
+
+*22 assessments passed, 2 failed (failures expected on error case which doesn't satisfy relevance/routing criteria)*
+
+Results viewable in MLflow UI at the experiment's evaluation runs.
 
 ### Generated Scorers (Actual Output)
 
@@ -345,6 +465,10 @@ The framework validates everything before declaring success:
   }
 }
 ```
+
+**Evaluation results in MLflow UI:**
+
+![MLflow experiment showing evaluation run with scorer metrics](./images/mlflow-eval-results.png)
 
 ---
 
@@ -451,6 +575,10 @@ python run_eval.py
 
 Results flow back to MLflow—tracked, comparable, integrated with your existing experiment structure.
 
+**Evaluation results in MLflow UI:**
+
+![MLflow experiment showing evaluation run with scorer metrics](./images/mlflow-eval-results.png)
+
 ---
 
 ## Summary
@@ -470,5 +598,6 @@ The value isn't just speed—it's the feedback loop. Production traces inform ev
 
 - [MLflow GenAI Evaluation Docs](https://mlflow.org/docs/latest/llms/llm-evaluate/)
 - [Databricks Agent Framework](https://docs.databricks.com/en/generative-ai/agent-framework/)
+- [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-sdk)
 - [Anthropic: Effective Harnesses for Long-Running Agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)
 - [Framework Repository](https://github.com/your-org/mlflow-eval-agent)
