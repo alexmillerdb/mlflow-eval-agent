@@ -205,6 +205,26 @@ Each session runs with fresh context (no accumulated errors) but reads shared st
 
 The initializer session analyzes your traces and creates a task plan. Each worker session picks up the next pending task, completes it, saves state, and exits. If validation fails, a fix task is added and the loop continues.
 
+### Why Databricks Jobs?
+
+The session-based architecture makes this framework ideal for Databricks Jobs rather than interactive notebooks:
+
+| Aspect | Interactive Notebook | Databricks Job |
+|--------|---------------------|----------------|
+| **Context** | State accumulates, errors compound | Fresh environment per run |
+| **Execution** | Requires attention | Runs unattended |
+| **Failure recovery** | Manual restart | Automatic retry from file state |
+| **Scheduling** | Manual trigger | Scheduled or triggered |
+| **Monitoring** | Watch output | Job UI, alerts |
+
+Each session reads state from files and writes results back—the agent can restart cleanly from any failure point. Job retries "just work" because sessions are designed to resume from persisted state.
+
+**Typical workflow:**
+1. Schedule job to run nightly/weekly against your production experiment
+2. Agent analyzes new traces, updates evaluation coverage
+3. Review generated artifacts in Unity Catalog Volume
+4. Iterate on scorers as your agent evolves
+
 ### Trace Analysis: The Starting Point
 
 The initializer session doesn't generate test cases from imagination—it derives them from how your agent actually behaves in production.
