@@ -147,7 +147,7 @@ This runs the same agent via CLI entry point rather than notebook.
 ```bash
 # Set environment variables
 cp .env.example .env
-# Edit .env with your Databricks credentials
+# Edit .env with your configuration (see below)
 
 # Run autonomous mode locally
 uv run python -m src.cli -a -e <experiment_id>
@@ -155,6 +155,28 @@ uv run python -m src.cli -a -e <experiment_id>
 # Interactive mode
 uv run python -m src.cli -i
 ```
+
+### Configuring Model Provider
+
+The agent requires access to Claude models. For Databricks users, use the Foundation Model APIs:
+
+```bash
+# .env - Databricks FM API configuration
+ANTHROPIC_BASE_URL=https://your-workspace.cloud.databricks.com/serving-endpoints
+ANTHROPIC_AUTH_TOKEN=dapi...          # Your Databricks PAT token
+ANTHROPIC_API_KEY=""                  # Required placeholder (must be empty string)
+MODEL=databricks-claude-opus-4-5
+```
+
+Alternatively, use the Anthropic API directly:
+
+```bash
+# .env - Direct Anthropic API
+ANTHROPIC_API_KEY=sk-ant-api03-...
+MODEL=claude-sonnet-4-20250514
+```
+
+See `.env.example` for full configuration options.
 
 ## Project Structure
 
