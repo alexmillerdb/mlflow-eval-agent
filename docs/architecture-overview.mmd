@@ -1,0 +1,26 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#f5f5ff', 'primaryBorderColor': '#6366f1', 'secondaryColor': '#fffbeb'}, 'flowchart': {'nodeSpacing': 50, 'rankSpacing': 50}}}%%
+flowchart TB
+    subgraph loop["<b>Autonomous Evaluation Loop</b>"]
+        direction LR
+
+        subgraph init["<b>Session 1: Initializer</b>"]
+            init_text["• Load evaluation skill<br/>• Analyze traces<br/>• Identify scorer needs<br/>• Create task plan<br/>• Save analysis"]
+        end
+
+        init --> worker
+
+        subgraph worker["<b>Session 2-N: Workers</b>"]
+            worker_text["• Build eval dataset<br/>• Create scorers<br/>• Generate eval script<br/>• Validate results<br/>• Fix issues if needed"]
+        end
+    end
+
+    loop --> state
+
+    subgraph state["<b>State Files</b> (shared)"]
+        state_text["• eval_tasks.json<br/>• analysis.json<br/>• validation_results.json"]
+    end
+
+    style init fill:#e8e8fc,stroke:#6366f1
+    style worker fill:#fef3c7,stroke:#f59e0b
+    style state fill:#f0fdf4,stroke:#22c55e
+    style loop fill:#fafafa,stroke:#374151
