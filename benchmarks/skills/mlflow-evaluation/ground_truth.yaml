@@ -1,0 +1,105 @@
+# Verified working examples generated via /skill-test
+# Each example has been executed and verified to work correctly.
+
+examples:
+  - id: gt-001
+    prompt: "Generate an evaluation script for a RAG agent"
+    response: |
+      Here's a complete MLflow evaluation script for a RAG agent:
+
+      ```python
+      """
+      MLflow 3 GenAI Evaluation Script for a RAG Agent (Local Mode)
+
+      Evaluates:
+      - Safety: No harmful content
+      - RelevanceToQuery: Response addresses the user's question
+      - RetrievalGroundedness: Response is grounded in retrieved documents
+      """
+
+      import mlflow
+      import mlflow.genai
+      from mlflow.genai.scorers import Safety, RelevanceToQuery, RetrievalGroundedness
+
+      # Use local tracking for testing (switch to "databricks" for production)
+      mlflow.set_tracking_uri("sqlite:///mlflow.db")
+      mlflow.set_experiment("rag-agent-evaluation")
+
+      # Sample evaluation dataset with proper nested structure
+      eval_data = [
+          {
+              "inputs": {
+                  "query": "What is MLflow and what are its main components?"
+              },
+          },
+          {
+              "inputs": {
+                  "query": "How do I log a model in MLflow?"
+              },
+          },
+          {
+              "inputs": {
+                  "query": "What is the difference between MLflow tracking and MLflow registry?"
+              },
+          },
+      ]
+
+      # Mock RAG agent for demonstration
+      # In production, import your actual agent: from my_rag_agent import rag_app
+      @mlflow.trace(name="rag_agent")
+      def rag_agent(query: str) -> dict:
+          """Simple mock RAG agent that simulates retrieval and generation."""
+
+          # Simulate retrieval step (marked with RETRIEVER span type)
+          @mlflow.trace(span_type="RETRIEVER")
+          def retrieve_documents(q: str) -> list:
+              # Mock retrieved documents
+              return [
+                  "MLflow is an open-source platform for managing the ML lifecycle.",
+                  "MLflow has four main components: Tracking, Projects, Models, and Registry.",
+                  "MLflow Tracking records parameters, metrics, and artifacts from ML runs.",
+              ]
+
+          # Simulate LLM generation step
+          @mlflow.trace(span_type="CHAT_MODEL")
+          def generate_response(q: str, docs: list) -> str:
+              # Mock response based on retrieved docs
+              context = " ".join(docs)
+              return f"Based on the documentation: {context[:200]}..."
+
+          docs = retrieve_documents(query)
+          response = generate_response(query, docs)
+
+          return {"response": response}
+
+
+      # Define predict_fn that receives unpacked kwargs (NOT a dict)
+      def predict_fn(query: str) -> dict:
+          """Wrapper that matches MLflow's expected signature."""
+          return rag_agent(query)
+
+
+      # Run evaluation with RAG-specific scorers
+      if __name__ == "__main__":
+          print("Running RAG agent evaluation...")
+
+          results = mlflow.genai.evaluate(
+              data=eval_data,
+              predict_fn=predict_fn,
+              scorers=[
+                  Safety(),                    # Check for harmful content
+                  RelevanceToQuery(),          # Check if response addresses query
+                  RetrievalGroundedness(),     # Check if grounded in retrieved docs
+              ]
+          )
+
+          print(f"\nEvaluation complete!")
+          print(f"Run ID: {results.run_id}")
+          print(f"Metrics: {results.metrics}")
+      ```
+    execution_success: true
+    created_at: "2025-01-10T13:19:00"
+    tags:
+      - evaluation
+      - rag
+      - scorers
