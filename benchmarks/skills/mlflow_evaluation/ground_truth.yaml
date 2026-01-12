@@ -1,0 +1,1219 @@
+# Verified working examples generated via /skill-test
+# Each example has been executed and verified to work correctly.
+
+examples:
+  - id: gt-001
+    prompt: "Generate an evaluation script for a RAG agent"
+    response: |
+      Here's a complete MLflow evaluation script for a RAG agent:
+
+      ```python
+      """
+      MLflow 3 GenAI Evaluation Script for a RAG Agent (Local Mode)
+
+      Evaluates:
+      - Safety: No harmful content
+      - RelevanceToQuery: Response addresses the user's question
+      - RetrievalGroundedness: Response is grounded in retrieved documents
+      """
+
+      import mlflow
+      import mlflow.genai
+      from mlflow.genai.scorers import Safety, RelevanceToQuery, RetrievalGroundedness
+
+      # Use local tracking for testing (switch to "databricks" for production)
+      mlflow.set_tracking_uri("sqlite:///mlflow.db")
+      mlflow.set_experiment("rag-agent-evaluation")
+
+      # Sample evaluation dataset with proper nested structure
+      eval_data = [
+          {
+              "inputs": {
+                  "query": "What is MLflow and what are its main components?"
+              },
+          },
+          {
+              "inputs": {
+                  "query": "How do I log a model in MLflow?"
+              },
+          },
+          {
+              "inputs": {
+                  "query": "What is the difference between MLflow tracking and MLflow registry?"
+              },
+          },
+      ]
+
+      # Mock RAG agent for demonstration
+      # In production, import your actual agent: from my_rag_agent import rag_app
+      @mlflow.trace(name="rag_agent")
+      def rag_agent(query: str) -> dict:
+          """Simple mock RAG agent that simulates retrieval and generation."""
+
+          # Simulate retrieval step (marked with RETRIEVER span type)
+          @mlflow.trace(span_type="RETRIEVER")
+          def retrieve_documents(q: str) -> list:
+              # Mock retrieved documents
+              return [
+                  "MLflow is an open-source platform for managing the ML lifecycle.",
+                  "MLflow has four main components: Tracking, Projects, Models, and Registry.",
+                  "MLflow Tracking records parameters, metrics, and artifacts from ML runs.",
+              ]
+
+          # Simulate LLM generation step
+          @mlflow.trace(span_type="CHAT_MODEL")
+          def generate_response(q: str, docs: list) -> str:
+              # Mock response based on retrieved docs
+              context = " ".join(docs)
+              return f"Based on the documentation: {context[:200]}..."
+
+          docs = retrieve_documents(query)
+          response = generate_response(query, docs)
+
+          return {"response": response}
+
+
+      # Define predict_fn that receives unpacked kwargs (NOT a dict)
+      def predict_fn(query: str) -> dict:
+          """Wrapper that matches MLflow's expected signature."""
+          return rag_agent(query)
+
+
+      # Run evaluation with RAG-specific scorers
+      if __name__ == "__main__":
+          print("Running RAG agent evaluation...")
+
+          results = mlflow.genai.evaluate(
+              data=eval_data,
+              predict_fn=predict_fn,
+              scorers=[
+                  Safety(),                    # Check for harmful content
+                  RelevanceToQuery(),          # Check if response addresses query
+                  RetrievalGroundedness(),     # Check if grounded in retrieved docs
+              ]
+          )
+
+          print(f"\nEvaluation complete!")
+          print(f"Run ID: {results.run_id}")
+          print(f"Metrics: {results.metrics}")
+      ```
+    execution_success: true
+    created_at: "2025-01-10T13:19:00"
+    tags:
+      - evaluation
+      - rag
+      - scorers
+
+  - id: gt-002
+    prompt: "Create custom scorer that checks JSON output in responses"
+    response: |
+      Here's a custom scorer that checks if responses contain valid JSON output:
+
+      ```python
+      import json
+      from mlflow.genai.scorers import scorer
+      from mlflow.entities import Feedback
+
+
+      @scorer
+      def json_output_check(outputs):
+          """Check if the response contains valid JSON output."""
+          response = str(outputs.get("response", ""))
+
+          # Try to parse the entire response as JSON
+          try:
+              json.loads(response)
+              return Feedback(
+                  value="yes",
+                  rationale="Response is valid JSON"
+              )
+          except json.JSONDecodeError:
+              pass
+
+          # Try to find JSON within the response (common pattern: ```json ... ```)
+          import re
+          json_patterns = [
+              r'```json\s*([\s\S]*?)\s*```',  # Markdown code block
+              r'```\s*([\s\S]*?)\s*```',       # Generic code block
+              r'\{[\s\S]*\}',                   # Object
+              r'\[[\s\S]*\]',                   # Array
+          ]
+
+          for pattern in json_patterns:
+              matches = re.findall(pattern, response)
+              for match in matches:
+                  try:
+                      json.loads(match.strip())
+                      return Feedback(
+                          value="yes",
+                          rationale=f"Found valid JSON in response"
+                      )
+                  except json.JSONDecodeError:
+                      continue
+
+          return Feedback(
+              value="no",
+              rationale="No valid JSON found in response"
+          )
+
+
+      # Test the scorer with sample data
+      if __name__ == "__main__":
+          # Test cases
+          test_outputs = [
+              {"response": '{"name": "test", "value": 123}'},
+              {"response": "Here is the data: ```json\n{\"key\": \"value\"}\n```"},
+              {"response": "No JSON here, just plain text."},
+              {"response": "[1, 2, 3, 4, 5]"},
+          ]
+
+          for i, outputs in enumerate(test_outputs):
+              result = json_output_check(outputs=outputs)
+              print(f"Test {i+1}: {result.value} - {result.rationale}")
+              print(f"  Input: {outputs['response'][:50]}...")
+              print()
+      ```
+    execution_success: true
+    created_at: "2025-01-12T00:00:00"
+    tags:
+      - scorer
+      - custom
+      - json
+      - validation
+
+  - id: gt-003
+    prompt: "Write Guidelines scorer for code quality evaluation and add to mlflow.genai.evaluation script"
+    response: |
+      Here's a complete MLflow evaluation script with a Guidelines scorer for code quality evaluation:
+
+      ```python
+      """
+      MLflow 3 GenAI Evaluation Script for Code Quality
+
+      Uses Guidelines scorer to evaluate if LLM-generated code meets quality standards:
+      - Proper error handling
+      - Clear variable naming
+      - Appropriate comments
+      - No hardcoded secrets
+      """
+
+      import mlflow
+      import mlflow.genai
+      from mlflow.genai.scorers import Guidelines, Safety
+
+      # Use local tracking for testing
+      mlflow.set_tracking_uri("sqlite:///mlflow.db")
+      mlflow.set_experiment("code-quality-evaluation")
+
+      # Define Guidelines scorer for code quality
+      code_quality_scorer = Guidelines(
+          name="code_quality",
+          guidelines=[
+              "The code must include error handling (try/except blocks) for operations that could fail",
+              "Variable names must be descriptive and follow snake_case convention",
+              "The code must not contain hardcoded passwords, API keys, or secrets",
+              "Functions must have docstrings explaining their purpose",
+          ]
+      )
+
+      # Additional scorer for security best practices
+      security_scorer = Guidelines(
+          name="security_practices",
+          guidelines=[
+              "The code must validate user inputs before processing",
+              "The code must not use eval() or exec() on untrusted input",
+              "Database queries must use parameterized statements, not string concatenation",
+          ]
+      )
+
+      # Sample evaluation dataset - code generation prompts and pre-computed outputs
+      eval_data = [
+          {
+              "inputs": {
+                  "prompt": "Write a Python function to read a JSON config file"
+              },
+              "outputs": {
+                  "response": '''
+      def read_config(filepath):
+          """Read and parse a JSON configuration file.
+
+          Args:
+              filepath: Path to the JSON config file
+
+          Returns:
+              dict: Parsed configuration data
+
+          Raises:
+              FileNotFoundError: If config file doesn't exist
+              json.JSONDecodeError: If file contains invalid JSON
+          """
+          import json
+
+          try:
+              with open(filepath, 'r') as config_file:
+                  config_data = json.load(config_file)
+              return config_data
+          except FileNotFoundError:
+              raise FileNotFoundError(f"Config file not found: {filepath}")
+          except json.JSONDecodeError as e:
+              raise json.JSONDecodeError(f"Invalid JSON in config: {e.msg}", e.doc, e.pos)
+      '''
+              }
+          },
+          {
+              "inputs": {
+                  "prompt": "Write a function to connect to a database"
+              },
+              "outputs": {
+                  "response": '''
+      def connect_db(host, port, username):
+          """Connect to the database using provided credentials.
+
+          Args:
+              host: Database server hostname
+              port: Database server port
+              username: Database username
+
+          Returns:
+              Connection object or None if connection fails
+          """
+          import os
+
+          # Get password from environment variable (not hardcoded)
+          db_password = os.environ.get("DB_PASSWORD")
+
+          if not db_password:
+              raise ValueError("DB_PASSWORD environment variable not set")
+
+          try:
+              # Using parameterized connection (not string concat)
+              connection_params = {
+                  "host": host,
+                  "port": int(port),
+                  "user": username,
+                  "password": db_password
+              }
+              # Placeholder for actual connection logic
+              print(f"Connecting to {host}:{port} as {username}")
+              return connection_params
+          except Exception as e:
+              print(f"Connection failed: {e}")
+              return None
+      '''
+              }
+          },
+          {
+              "inputs": {
+                  "prompt": "Write code to process user input"
+              },
+              "outputs": {
+                  "response": '''
+      # BAD CODE EXAMPLE - should fail quality checks
+      def process(x):
+          pwd = "admin123"  # hardcoded password!
+          result = eval(x)  # dangerous eval on user input!
+          query = "SELECT * FROM users WHERE id=" + x  # SQL injection risk!
+          return result
+      '''
+              }
+          },
+      ]
+
+      # Run evaluation
+      if __name__ == "__main__":
+          print("Running code quality evaluation...")
+          print(f"Evaluating {len(eval_data)} code samples\n")
+
+          results = mlflow.genai.evaluate(
+              data=eval_data,
+              scorers=[
+                  code_quality_scorer,
+                  security_scorer,
+                  Safety(),  # Built-in safety check
+              ]
+          )
+
+          print(f"\nEvaluation complete!")
+          print(f"Run ID: {results.run_id}")
+          print(f"\nMetrics:")
+          for metric, value in results.metrics.items():
+              print(f"  {metric}: {value}")
+      ```
+    execution_success: true
+    created_at: "2025-01-12T00:00:00"
+    tags:
+      - evaluation
+      - guidelines
+      - code-quality
+      - security
+
+  - id: gt-004
+    prompt: "Create evaluation with Correctness scorer using expected_facts for ground truth"
+    response: |
+      Here's a complete evaluation script using the Correctness scorer with expected_facts for ground truth validation:
+
+      ```python
+      """
+      MLflow 3 GenAI Evaluation with Correctness Scorer
+
+      Uses Correctness scorer to validate responses against expected facts.
+      The scorer checks if the response contains the required factual information.
+      """
+
+      import mlflow
+      import mlflow.genai
+      from mlflow.genai.scorers import Correctness, Safety, RelevanceToQuery
+
+      # Use local tracking for testing
+      mlflow.set_tracking_uri("sqlite:///mlflow.db")
+      mlflow.set_experiment("correctness-evaluation")
+
+      # Pre-computed outputs with expected_facts for ground truth
+      eval_data_with_outputs = [
+          {
+              "inputs": {"query": "What is MLflow and what are its main components?"},
+              "outputs": {
+                  "response": """MLflow is an open-source platform for managing the ML lifecycle.
+                  Its main components include:
+                  - Tracking for experiment logging and comparison
+                  - Models for packaging ML models in a standard format
+                  - Model Registry for versioning and managing models
+                  - Projects for reproducible runs"""
+              },
+              "expectations": {
+                  "expected_facts": [
+                      "MLflow is an open-source platform",
+                      "MLflow has Tracking for experiment logging",
+                      "MLflow has Models for packaging",
+                      "MLflow has Model Registry for versioning",
+                  ]
+              }
+          },
+          {
+              "inputs": {"query": "What is the capital of France and what is it known for?"},
+              "outputs": {
+                  "response": "Paris is the capital of France. It is known for the Eiffel Tower, the Louvre Museum, and its rich cultural heritage."
+              },
+              "expectations": {
+                  "expected_facts": [
+                      "Paris is the capital of France",
+                      "Paris is known for the Eiffel Tower",
+                  ]
+              }
+          },
+          {
+              "inputs": {"query": "When was Python created and by whom?"},
+              "outputs": {
+                  "response": "Python was created by Guido van Rossum and first released in 1991."
+              },
+              "expectations": {
+                  # Alternative: use expected_response for exact match
+                  "expected_response": "Python was created by Guido van Rossum and first released in 1991."
+              }
+          },
+      ]
+
+      # Run evaluation
+      if __name__ == "__main__":
+          print("Running Correctness evaluation with expected_facts...")
+          print(f"Evaluating {len(eval_data_with_outputs)} samples\n")
+
+          results = mlflow.genai.evaluate(
+              data=eval_data_with_outputs,
+              scorers=[
+                  Correctness(),       # Checks against expected_facts/expected_response
+                  Safety(),            # Always include safety check
+                  RelevanceToQuery(),  # Check if response addresses query
+              ]
+          )
+
+          print(f"\nEvaluation complete!")
+          print(f"Run ID: {results.run_id}")
+          print(f"\nMetrics:")
+          for metric, value in results.metrics.items():
+              print(f"  {metric}: {value}")
+      ```
+    execution_success: true
+    created_at: "2025-01-12T00:00:00"
+    tags:
+      - evaluation
+      - correctness
+      - expected-facts
+      - ground-truth
+
+  - id: gt-005
+    prompt: "Write a scorer that analyzes trace spans to check LLM latency"
+    response: |
+      Here's a trace-based scorer that analyzes spans to check LLM latency:
+
+      ```python
+      """
+      MLflow 3 GenAI Trace-Based Scorer for LLM Latency
+
+      Demonstrates how to create scorers that analyze trace execution details,
+      including span timing, span types, and performance metrics.
+      """
+
+      import mlflow
+      import mlflow.genai
+      from mlflow.genai.scorers import scorer, Safety
+      from mlflow.entities import Feedback, Trace, SpanType
+
+      # Use local tracking for testing
+      mlflow.set_tracking_uri("sqlite:///mlflow.db")
+      mlflow.set_experiment("trace-based-scorer-evaluation")
+
+
+      @scorer
+      def llm_latency_check(trace: Trace) -> Feedback:
+          """Check if total LLM response time is within acceptable limits."""
+
+          # Find all LLM/chat model spans in the trace
+          llm_spans = trace.search_spans(span_type=SpanType.CHAT_MODEL)
+
+          if not llm_spans:
+              return Feedback(
+                  value="skip",
+                  rationale="No LLM calls found in trace"
+              )
+
+          # Calculate total LLM time across all spans
+          total_llm_time_seconds = 0
+          span_details = []
+
+          for span in llm_spans:
+              duration_seconds = (span.end_time_ns - span.start_time_ns) / 1e9
+              total_llm_time_seconds += duration_seconds
+              span_details.append(f"{span.name}: {duration_seconds:.2f}s")
+
+          # Define acceptable threshold (5 seconds)
+          max_acceptable_seconds = 5.0
+
+          if total_llm_time_seconds <= max_acceptable_seconds:
+              return Feedback(
+                  value="yes",
+                  rationale=f"LLM latency {total_llm_time_seconds:.2f}s within {max_acceptable_seconds}s limit. Spans: {', '.join(span_details)}"
+              )
+          else:
+              return Feedback(
+                  value="no",
+                  rationale=f"LLM latency {total_llm_time_seconds:.2f}s exceeds {max_acceptable_seconds}s limit. Spans: {', '.join(span_details)}"
+              )
+
+
+      @scorer
+      def tool_call_counter(trace: Trace) -> Feedback:
+          """Count and report tool calls in the trace."""
+
+          tool_spans = trace.search_spans(span_type=SpanType.TOOL)
+          tool_names = [span.name for span in tool_spans]
+
+          return Feedback(
+              value=len(tool_spans),
+              rationale=f"Tools called: {tool_names}" if tool_names else "No tools called"
+          )
+
+
+      # Create a mock traced application for testing
+      @mlflow.trace(name="test_agent")
+      def mock_agent(query: str) -> dict:
+          """Mock agent that creates spans for testing."""
+
+          @mlflow.trace(span_type="CHAT_MODEL", name="llm_call_1")
+          def mock_llm_call(prompt: str) -> str:
+              import time
+              time.sleep(0.1)  # Simulate LLM latency
+              return f"Response to: {prompt}"
+
+          @mlflow.trace(span_type="TOOL", name="search_tool")
+          def mock_tool(query: str) -> list:
+              return ["result1", "result2"]
+
+          # Execute mock spans
+          tool_results = mock_tool(query)
+          response = mock_llm_call(f"{query} with context: {tool_results}")
+
+          return {"response": response}
+
+
+      # Wrapper for predict_fn (receives unpacked kwargs)
+      def predict_fn(query: str) -> dict:
+          return mock_agent(query)
+
+
+      # Evaluation dataset
+      eval_data = [
+          {"inputs": {"query": "What is machine learning?"}},
+          {"inputs": {"query": "Explain neural networks"}},
+      ]
+
+
+      if __name__ == "__main__":
+          print("Running trace-based scorer evaluation...")
+
+          results = mlflow.genai.evaluate(
+              data=eval_data,
+              predict_fn=predict_fn,
+              scorers=[
+                  llm_latency_check,     # Trace-based: checks LLM timing
+                  tool_call_counter,      # Trace-based: counts tool usage
+                  Safety(),               # Standard safety check
+              ]
+          )
+
+          print(f"Run ID: {results.run_id}")
+          print(f"Metrics: {results.metrics}")
+      ```
+    execution_success: true
+    created_at: "2025-01-12T00:00:00"
+    tags:
+      - scorer
+      - trace-based
+      - latency
+      - spans
+      - performance
+
+  - id: gt-006
+    prompt: "Create a custom LLM judge using make_judge for issue resolution"
+    response: |
+      Here's a custom LLM judge using make_judge for evaluating customer issue resolution:
+
+      ```python
+      """
+      MLflow 3 GenAI Custom Judge with make_judge
+
+      Demonstrates how to create custom LLM-as-judge scorers using make_judge()
+      for complex, multi-level evaluation that goes beyond simple yes/no.
+      """
+
+      import mlflow
+      import mlflow.genai
+      from mlflow.genai.judges import make_judge
+      from mlflow.genai.scorers import Safety
+
+      # Use local tracking for testing
+      mlflow.set_tracking_uri("sqlite:///mlflow.db")
+      mlflow.set_experiment("custom-judge-evaluation")
+
+      # Create a custom judge for issue resolution quality
+      issue_resolution_judge = make_judge(
+          name="issue_resolution",
+          instructions="""
+          Evaluate if the customer support agent properly resolved the customer's issue.
+
+          Customer's messages: {{ inputs }}
+          Agent's response: {{ outputs }}
+
+          Assess the resolution status and respond with EXACTLY one of these values:
+          - 'fully_resolved': Issue completely addressed with clear solution provided
+          - 'partially_resolved': Some help provided but not fully solved or needs follow-up
+          - 'not_resolved': Issue not adequately addressed or agent failed to help
+
+          Your response must be exactly one of these three values, nothing else.
+          """
+      )
+
+      # Create another judge for response professionalism
+      professionalism_judge = make_judge(
+          name="professionalism",
+          instructions="""
+          Evaluate if the agent's response maintains professional standards.
+
+          Agent's response: {{ outputs }}
+
+          Check for:
+          1. Polite and respectful tone
+          2. Clear and grammatically correct language
+          3. Appropriate empathy for customer concerns
+          4. No inappropriate or unprofessional content
+
+          Respond with 'yes' if professional, 'no' if not professional.
+          """
+      )
+
+      # Evaluation dataset - customer support scenarios
+      eval_data = [
+          {
+              "inputs": {
+                  "messages": [
+                      {"role": "user", "content": "I can't log into my account."}
+                  ]
+              },
+              "outputs": {
+                  "response": "I understand how frustrating login issues can be. Let me help you resolve this..."
+              }
+          },
+          {
+              "inputs": {
+                  "messages": [
+                      {"role": "user", "content": "How do I cancel my subscription?"}
+                  ]
+              },
+              "outputs": {
+                  "response": "idk check the website or something"
+              }
+          },
+      ]
+
+      if __name__ == "__main__":
+          print("Running custom judge evaluation...")
+
+          results = mlflow.genai.evaluate(
+              data=eval_data,
+              scorers=[
+                  issue_resolution_judge,   # Custom: multi-level resolution assessment
+                  professionalism_judge,    # Custom: yes/no professionalism check
+                  Safety(),                 # Built-in: safety check
+              ]
+          )
+
+          print(f"Run ID: {results.run_id}")
+          print(f"Metrics: {results.metrics}")
+      ```
+    execution_success: true
+    created_at: "2025-01-12T00:00:00"
+    tags:
+      - scorer
+      - make-judge
+      - llm-as-judge
+      - custom
+      - customer-support
+
+  - id: gt-007
+    prompt: "Create a scorer that returns multiple Feedback objects from one function"
+    response: |
+      Here's a scorer that returns multiple metrics from a single function:
+
+      ```python
+      """
+      MLflow 3 GenAI Multi-Metric Scorer
+
+      Demonstrates how to create a single scorer that returns multiple Feedback
+      objects, allowing one scorer to produce several metrics at once.
+      """
+
+      import mlflow
+      import mlflow.genai
+      from mlflow.genai.scorers import scorer, Safety
+      from mlflow.entities import Feedback
+
+      # Use local tracking for testing
+      mlflow.set_tracking_uri("sqlite:///mlflow.db")
+      mlflow.set_experiment("multi-metric-scorer-evaluation")
+
+
+      @scorer
+      def comprehensive_response_check(inputs, outputs) -> list:
+          """
+          Analyze response quality across multiple dimensions.
+          Returns a list of Feedback objects, each becoming a separate metric.
+          """
+          response = str(outputs.get("response", ""))
+          query = str(inputs.get("query", ""))
+
+          feedbacks = []
+
+          # Metric 1: Word count (numeric)
+          word_count = len(response.split())
+          feedbacks.append(Feedback(
+              name="word_count",
+              value=word_count,
+              rationale=f"Response contains {word_count} words"
+          ))
+
+          # Metric 2: Query term coverage (float)
+          query_terms = set(query.lower().split())
+          response_lower = response.lower()
+          if query_terms:
+              terms_found = sum(1 for term in query_terms if term in response_lower)
+              coverage = terms_found / len(query_terms)
+          else:
+              coverage = 0.0
+          feedbacks.append(Feedback(
+              name="query_coverage",
+              value=round(coverage, 2),
+              rationale=f"{coverage*100:.0f}% of query terms found in response"
+          ))
+
+          # Metric 3: Contains code (boolean)
+          has_code = "```" in response or "def " in response
+          feedbacks.append(Feedback(
+              name="contains_code",
+              value=has_code,
+              rationale="Response contains code" if has_code else "No code detected"
+          ))
+
+          return feedbacks
+
+
+      # Evaluation dataset
+      eval_data = [
+          {
+              "inputs": {"query": "What is machine learning?"},
+              "outputs": {"response": "Machine learning is a subset of AI..."}
+          },
+          {
+              "inputs": {"query": "Explain Python decorators"},
+              "outputs": {"response": "Decorators in Python are functions..."}
+          },
+      ]
+
+
+      if __name__ == "__main__":
+          results = mlflow.genai.evaluate(
+              data=eval_data,
+              scorers=[comprehensive_response_check, Safety()]
+          )
+
+          print(f"Run ID: {results.run_id}")
+          print(f"Metrics: {results.metrics}")
+      ```
+    execution_success: true
+    created_at: "2025-01-12T00:00:00"
+    tags:
+      - scorer
+      - multi-metric
+      - feedback
+      - custom
+
+  - id: gt-008
+    prompt: "Write evaluation using ExpectationsGuidelines with per-row criteria"
+    response: |
+      Here's an evaluation using ExpectationsGuidelines for per-row criteria:
+
+      ```python
+      """
+      MLflow 3 GenAI ExpectationsGuidelines Scorer
+
+      Demonstrates using ExpectationsGuidelines scorer where each row in the
+      dataset has its own specific guidelines to evaluate against.
+      """
+
+      import mlflow
+      import mlflow.genai
+      from mlflow.genai.scorers import ExpectationsGuidelines, Safety
+
+      # Use local tracking for testing
+      mlflow.set_tracking_uri("sqlite:///mlflow.db")
+      mlflow.set_experiment("expectations-guidelines-evaluation")
+
+      # Dataset with per-row guidelines in expectations
+      eval_data = [
+          {
+              "inputs": {"query": "Explain quantum computing to a 10-year-old"},
+              "outputs": {
+                  "response": "Imagine you have a magical coin that can be both heads AND tails..."
+              },
+              "expectations": {
+                  "guidelines": [
+                      "Must use simple language appropriate for a child",
+                      "Must include an analogy or comparison to everyday things",
+                      "Must avoid technical jargon and complex terminology"
+                  ]
+              }
+          },
+          {
+              "inputs": {"query": "Write a professional email declining a meeting"},
+              "outputs": {
+                  "response": "Subject: Re: Meeting Request - Schedule Conflict..."
+              },
+              "expectations": {
+                  "guidelines": [
+                      "Must maintain professional and courteous tone",
+                      "Must clearly state inability to attend",
+                      "Must offer alternative solutions or next steps"
+                  ]
+              }
+          },
+          {
+              "inputs": {"query": "Provide step-by-step instructions for making coffee"},
+              "outputs": {
+                  "response": "1. Fill kettle with water and boil..."
+              },
+              "expectations": {
+                  "guidelines": [
+                      "Must provide numbered or bulleted steps",
+                      "Must include specific measurements or quantities",
+                      "Must be in logical sequential order"
+                  ]
+              }
+          },
+      ]
+
+
+      if __name__ == "__main__":
+          print("Running ExpectationsGuidelines evaluation...")
+
+          results = mlflow.genai.evaluate(
+              data=eval_data,
+              scorers=[
+                  ExpectationsGuidelines(),  # Uses expectations.guidelines from each row
+                  Safety(),
+              ]
+          )
+
+          print(f"Run ID: {results.run_id}")
+          print(f"Metrics: {results.metrics}")
+      ```
+    execution_success: true
+    created_at: "2025-01-12T00:00:00"
+    tags:
+      - evaluation
+      - expectations-guidelines
+      - per-row-criteria
+      - dynamic
+
+  - id: gt-009
+    prompt: "Create a class-based scorer with configurable thresholds"
+    response: |
+      Here's a class-based scorer with configurable thresholds:
+
+      ```python
+      """
+      MLflow 3 GenAI Class-Based Scorer with Configuration
+
+      Demonstrates how to create reusable scorers using class-based pattern,
+      allowing configuration of thresholds and behavior per instance.
+      """
+
+      import mlflow
+      import mlflow.genai
+      from mlflow.genai.scorers import Scorer, Safety
+      from mlflow.entities import Feedback
+      from typing import List
+
+      mlflow.set_tracking_uri("sqlite:///mlflow.db")
+      mlflow.set_experiment("class-based-scorer-evaluation")
+
+
+      class ResponseLengthScorer(Scorer):
+          """Configurable scorer that checks response length against thresholds."""
+
+          name: str = "response_length"
+          min_words: int = 10
+          max_words: int = 500
+
+          def __call__(self, outputs) -> Feedback:
+              response = str(outputs.get("response", ""))
+              word_count = len(response.split())
+
+              if word_count < self.min_words:
+                  return Feedback(value="no", rationale=f"Too short: {word_count} words")
+              elif word_count > self.max_words:
+                  return Feedback(value="no", rationale=f"Too long: {word_count} words")
+              else:
+                  return Feedback(value="yes", rationale=f"Acceptable: {word_count} words")
+
+
+      class KeywordRequirementScorer(Scorer):
+          """Configurable scorer that checks for required keywords."""
+
+          name: str = "keyword_check"
+          required_keywords: List[str] = []
+          case_sensitive: bool = False
+
+          def __call__(self, outputs) -> Feedback:
+              response = str(outputs.get("response", ""))
+              if not self.case_sensitive:
+                  response = response.lower()
+                  keywords = [k.lower() for k in self.required_keywords]
+              else:
+                  keywords = self.required_keywords
+
+              missing = [k for k in keywords if k not in response]
+              if not missing:
+                  return Feedback(value="yes", rationale="All keywords present")
+              return Feedback(value="no", rationale=f"Missing: {missing}")
+
+
+      # Create configured instances
+      chat_length = ResponseLengthScorer(name="chat_length", min_words=5, max_words=100)
+      product_keywords = KeywordRequirementScorer(
+          name="product_mentions",
+          required_keywords=["MLflow", "tracking"],
+          case_sensitive=False
+      )
+
+      eval_data = [
+          {"inputs": {"query": "What is MLflow?"}, "outputs": {"response": "MLflow is a platform for tracking ML experiments."}},
+          {"inputs": {"query": "Hello"}, "outputs": {"response": "Hi!"}},
+      ]
+
+      if __name__ == "__main__":
+          results = mlflow.genai.evaluate(
+              data=eval_data,
+              scorers=[chat_length, product_keywords, Safety()]
+          )
+          print(f"Metrics: {results.metrics}")
+      ```
+    execution_success: true
+    created_at: "2025-01-12T00:00:00"
+    tags:
+      - scorer
+      - class-based
+      - configurable
+      - reusable
+
+  - id: gt-010
+    prompt: "Build evaluation dataset from production traces using mlflow.search_traces"
+    response: |
+      Here's a script to build an evaluation dataset from production traces:
+
+      ```python
+      """
+      MLflow 3 GenAI - Build Evaluation Dataset from Traces
+      """
+
+      import mlflow
+      import mlflow.genai
+      from mlflow.genai.scorers import Safety, Guidelines
+
+      mlflow.set_tracking_uri("sqlite:///mlflow.db")
+      mlflow.set_experiment("traces-to-dataset-evaluation")
+
+
+      def create_sample_traces():
+          """Create sample traces for demonstration."""
+
+          @mlflow.trace(name="sample_agent")
+          def sample_agent(query: str) -> dict:
+              responses = {
+                  "What is MLflow?": "MLflow is an open-source platform for ML lifecycle.",
+                  "How do I track?": "Use mlflow.start_run() to begin tracking.",
+              }
+              return {"response": responses.get(query, "Unknown")}
+
+          for query in ["What is MLflow?", "How do I track?"]:
+              sample_agent(query)
+
+
+      def build_dataset_from_traces(filter_string=None, max_results=100):
+          """Build evaluation dataset from MLflow traces."""
+
+          traces_df = mlflow.search_traces(
+              filter_string=filter_string,
+              max_results=max_results,
+              order_by=["attributes.timestamp_ms DESC"]
+          )
+
+          eval_data = []
+          for idx, row in traces_df.iterrows():
+              record = {
+                  "inputs": row["request"] if isinstance(row["request"], dict) else {"query": str(row["request"])}
+              }
+              if row["response"] is not None:
+                  record["outputs"] = row["response"] if isinstance(row["response"], dict) else {"response": str(row["response"])}
+              eval_data.append(record)
+
+          return eval_data
+
+
+      if __name__ == "__main__":
+          # Create sample traces
+          create_sample_traces()
+
+          # Build dataset from OK traces
+          eval_data = build_dataset_from_traces(
+              filter_string="attributes.status = 'OK'",
+              max_results=50
+          )
+
+          if eval_data:
+              results = mlflow.genai.evaluate(
+                  data=eval_data,
+                  scorers=[Safety(), Guidelines(name="quality", guidelines="Be helpful")]
+              )
+              print(f"Metrics: {results.metrics}")
+      ```
+    execution_success: true
+    created_at: "2025-01-12T00:00:00"
+    tags:
+      - dataset
+      - traces
+      - search-traces
+      - production
+
+  - id: gt-011
+    prompt: "Create a numeric scorer with aggregations for latency and token metrics"
+    response: |
+      Here's a numeric scorer with aggregations for computing statistics:
+
+      ```python
+      """
+      MLflow 3 GenAI Numeric Scorer with Aggregations
+
+      Demonstrates how to create numeric scorers that return aggregate statistics
+      like mean, median, p90 across the evaluation dataset.
+
+      IMPORTANT: Valid aggregations are: min, max, mean, median, variance, p90
+      NOTE: p50, p99, sum are NOT valid - use median instead of p50
+      """
+
+      import mlflow
+      import mlflow.genai
+      from mlflow.genai.scorers import scorer, Safety
+      from mlflow.entities import Feedback
+
+      mlflow.set_tracking_uri("sqlite:///mlflow.db")
+      mlflow.set_experiment("numeric-aggregations-evaluation")
+
+
+      @scorer(aggregations=["mean", "min", "max", "median", "p90"])
+      def response_latency(outputs) -> float:
+          """Return response generation latency from outputs."""
+          return outputs.get("latency_ms", 0) / 1000.0  # Convert to seconds
+
+
+      @scorer(aggregations=["mean", "min", "max"])
+      def token_count(outputs) -> int:
+          """Return approximate token count from response."""
+          response = str(outputs.get("response", ""))
+          return len(response.split())
+
+
+      @scorer(aggregations=["mean", "median", "variance"])
+      def confidence_score(outputs) -> float:
+          """Return confidence score from outputs."""
+          return outputs.get("confidence", 0.0)
+
+
+      eval_data = [
+          {
+              "inputs": {"query": "What is MLflow?"},
+              "outputs": {
+                  "response": "MLflow is an open-source platform for managing the ML lifecycle.",
+                  "latency_ms": 450,
+                  "confidence": 0.95
+              }
+          },
+          {
+              "inputs": {"query": "How do I log metrics?"},
+              "outputs": {
+                  "response": "Use mlflow.log_metric() to log individual metrics.",
+                  "latency_ms": 320,
+                  "confidence": 0.88
+              }
+          },
+          {
+              "inputs": {"query": "What are scorers?"},
+              "outputs": {
+                  "response": "Scorers are functions that evaluate model outputs.",
+                  "latency_ms": 250,
+                  "confidence": 0.75
+              }
+          },
+      ]
+
+
+      if __name__ == "__main__":
+          results = mlflow.genai.evaluate(
+              data=eval_data,
+              scorers=[response_latency, token_count, confidence_score, Safety()]
+          )
+
+          print(f"Metrics ({len(results.metrics)} total):")
+          for metric, value in sorted(results.metrics.items()):
+              print(f"  {metric}: {value:.4f}" if isinstance(value, float) else f"  {metric}: {value}")
+      ```
+    execution_success: true
+    created_at: "2025-01-12T00:00:00"
+    tags:
+      - scorer
+      - aggregations
+      - numeric
+      - latency
+      - statistics
+
+  - id: gt-012
+    prompt: "Create a version comparison script to compare agent evaluation results"
+    response: |
+      Here's a script to compare evaluation results across agent versions:
+
+      ```python
+      """
+      MLflow 3 GenAI Version Comparison Script
+
+      Demonstrates how to compare evaluation results across different
+      versions of an agent to track improvements or regressions.
+      """
+
+      import mlflow
+      import mlflow.genai
+      from mlflow.genai.scorers import Safety, Guidelines, scorer
+      from mlflow.entities import Feedback
+
+      mlflow.set_tracking_uri("sqlite:///mlflow.db")
+      mlflow.set_experiment("version-comparison-evaluation")
+
+
+      # Simulated agent versions with different quality levels
+      def agent_v1(query: str) -> dict:
+          """Version 1: Basic responses."""
+          return {"response": "MLflow is a tool."}
+
+
+      def agent_v2(query: str) -> dict:
+          """Version 2: Improved responses with more detail."""
+          return {"response": "MLflow is an open-source platform for managing the entire machine learning lifecycle, including experiment tracking, model packaging, and deployment."}
+
+
+      @scorer
+      def response_detail_score(outputs) -> Feedback:
+          """Score response detail level."""
+          response = str(outputs.get("response", ""))
+          word_count = len(response.split())
+
+          if word_count < 10:
+              return Feedback(name="detail_level", value="poor", rationale=f"Brief: {word_count} words")
+          elif word_count < 30:
+              return Feedback(name="detail_level", value="good", rationale=f"Detailed: {word_count} words")
+          else:
+              return Feedback(name="detail_level", value="excellent", rationale=f"Very detailed: {word_count} words")
+
+
+      eval_data = [{"inputs": {"query": "What is MLflow?"}}]
+
+      quality_scorer = Guidelines(
+          name="response_quality",
+          guidelines=["Response must be informative", "Response must address the question fully"]
+      )
+
+
+      def run_version_evaluation(version_name: str, predict_fn) -> dict:
+          """Run evaluation for a specific agent version."""
+          with mlflow.start_run(run_name=version_name, nested=True):
+              mlflow.set_tag("agent_version", version_name)
+
+              results = mlflow.genai.evaluate(
+                  data=eval_data,
+                  predict_fn=predict_fn,
+                  scorers=[response_detail_score, quality_scorer, Safety()]
+              )
+
+              return {"run_id": results.run_id, "metrics": results.metrics}
+
+
+      def compare_versions(v1_results: dict, v2_results: dict):
+          """Compare metrics between versions."""
+          v1_metrics = v1_results["metrics"]
+          v2_metrics = v2_results["metrics"]
+
+          for metric in sorted(set(v1_metrics.keys()) | set(v2_metrics.keys())):
+              v1_val = v1_metrics.get(metric, "N/A")
+              v2_val = v2_metrics.get(metric, "N/A")
+              print(f"  {metric}: v1={v1_val}, v2={v2_val}")
+
+
+      if __name__ == "__main__":
+          with mlflow.start_run(run_name="agent_version_comparison"):
+              v1_results = run_version_evaluation("agent_v1", agent_v1)
+              v2_results = run_version_evaluation("agent_v2", agent_v2)
+              compare_versions(v1_results, v2_results)
+      ```
+    execution_success: true
+    created_at: "2025-01-12T00:00:00"
+    tags:
+      - evaluation
+      - version-comparison
+      - a-b-testing
+      - regression-testing

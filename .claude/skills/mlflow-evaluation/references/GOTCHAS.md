@@ -22,6 +22,7 @@
 - [Wrong Guidelines Context Reference](#-wrong-guidelines-context-reference)
 - [Wrong Production Monitoring Setup](#-wrong-production-monitoring-setup)
 - [Wrong Custom Judge Model Format](#-wrong-custom-judge-model-format)
+- [Wrong Aggregation Values](#-wrong-aggregation-values)
 - [Summary Checklist](#summary-checklist)
 
 ---
@@ -501,6 +502,34 @@ Guidelines(name="test", guidelines="...", model="openai:/gpt-4o")
 
 ---
 
+## ❌ WRONG Aggregation Values
+
+### WRONG: Invalid aggregation names
+```python
+# ❌ WRONG - p50, p99, sum are not valid
+@scorer(aggregations=["mean", "p50", "p99", "sum"])
+def my_scorer(outputs) -> float:
+    return 0.5
+```
+
+### ✅ CORRECT: Use valid aggregation names
+```python
+# ✅ CORRECT - Only these 6 are valid
+@scorer(aggregations=["min", "max", "mean", "median", "variance", "p90"])
+def my_scorer(outputs) -> float:
+    return 0.5
+```
+
+**Valid aggregations:**
+- `min` - minimum value
+- `max` - maximum value
+- `mean` - average value
+- `median` - 50th percentile (NOT `p50`)
+- `variance` - statistical variance
+- `p90` - 90th percentile (only p90, NOT p50 or p99)
+
+---
+
 ## Summary Checklist
 
 Before running evaluation, verify:
@@ -515,3 +544,4 @@ Before running evaluation, verify:
 - [ ] Trace filters use `attributes.` prefix and single quotes
 - [ ] Production scorers have inline imports
 - [ ] Multiple Feedbacks have unique names
+- [ ] Aggregations use valid names: min, max, mean, median, variance, p90
