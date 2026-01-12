@@ -63,7 +63,7 @@ def cmd_run(args):
     print(f"  Experiment: {config.experiment_name}")
 
     # Show model for LLM presets
-    requires_llm = args.preset in ("full", "tier2", "tier3", "all")
+    requires_llm = args.preset in ("full", "tier3", "all")
     if requires_llm:
         print(f"  Judge Model: {config.judge_model}")
 
@@ -236,7 +236,7 @@ def main():
     run_parser.add_argument(
         "--preset", "-p",
         default="full",
-        choices=["full", "quick", "tier1", "tier2", "tier3"],
+        choices=["full", "quick", "tier1", "tier3"],
         help="Scorer preset (default: full)"
     )
     run_parser.add_argument(

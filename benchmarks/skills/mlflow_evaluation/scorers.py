@@ -1,9 +1,8 @@
 """
 Scorers for mlflow-evaluation skill benchmark.
 
-Three-tier scoring strategy:
-- Tier 1: Pattern-matching scorers (deterministic checks)
-- Tier 2: make_judge with curated references (API correctness grounded in docs)
+Two-tier scoring strategy:
+- Tier 1: Pattern-matching scorers (deterministic API correctness checks)
 - Tier 3: Guidelines scorers (subjective quality assessment)
 """
 
@@ -11,7 +10,6 @@ import ast
 import os
 import re
 from mlflow.genai.scorers import scorer, Guidelines, Safety
-from mlflow.genai.judges import make_judge
 from mlflow.entities import Feedback
 
 
@@ -250,6 +248,206 @@ def uses_valid_aggregations(outputs) -> Feedback:
     )
 
 
+@scorer
+def predict_fn_unpacks_kwargs(outputs) -> Feedback:
+    """
+    Check if predict_fn signature receives unpacked kwargs.
+
+    CORRECT:   def my_app(query, context=None)
+    WRONG:     def my_app(inputs)
+    """
+    response = str(outputs.get("response", ""))
+    code = extract_all_code(response)
+
+    if not code or "predict_fn" not in response.lower():
+        return Feedback(
+            name="predict_fn_unpacks_kwargs",
+            value="skip",
+            rationale="No predict_fn found in response"
+        )
+
+    # Look for predict_fn definition or reference
+    # Check for common mistake: single 'inputs' parameter
+    has_inputs_param = bool(re.search(r'def\s+\w+\s*\(\s*inputs\s*[,\)]', code))
+
+    # Check for correct pattern: multiple named params
+    has_unpacked = bool(re.search(r'def\s+\w+\s*\([^)]*\bquery\b', code)) or \
+                   bool(re.search(r'def\s+\w+\s*\([^)]*\bprompt\b', code)) or \
+                   bool(re.search(r'def\s+\w+\s*\(\*\*', code))  # **kwargs
+
+    if has_inputs_param and not has_unpacked:
+        return Feedback(
+            name="predict_fn_unpacks_kwargs",
+            value="no",
+            rationale="predict_fn uses 'inputs' parameter instead of unpacking kwargs"
+        )
+
+    if has_unpacked:
+        return Feedback(
+            name="predict_fn_unpacks_kwargs",
+            value="yes",
+            rationale="predict_fn correctly unpacks kwargs"
+        )
+
+    return Feedback(
+        name="predict_fn_unpacks_kwargs",
+        value="skip",
+        rationale="Could not determine predict_fn signature pattern"
+    )
+
+
+@scorer
+def guidelines_has_name(outputs) -> Feedback:
+    """
+    Check if Guidelines scorers include required 'name' parameter.
+
+    CORRECT:   Guidelines(name="check", guidelines="...")
+    WRONG:     Guidelines(guidelines="...")
+    """
+    response = str(outputs.get("response", ""))
+    code = extract_all_code(response)
+
+    if not code or "Guidelines" not in code:
+        return Feedback(
+            name="guidelines_has_name",
+            value="skip",
+            rationale="No Guidelines scorer found"
+        )
+
+    # Find all Guidelines() calls
+    guidelines_calls = re.findall(r'Guidelines\s*\([^)]+\)', code, re.DOTALL)
+
+    if not guidelines_calls:
+        return Feedback(
+            name="guidelines_has_name",
+            value="skip",
+            rationale="No Guidelines() instantiation found"
+        )
+
+    missing_name = []
+    for i, call in enumerate(guidelines_calls):
+        if "name=" not in call and "name =" not in call:
+            missing_name.append(f"call {i+1}")
+
+    if missing_name:
+        return Feedback(
+            name="guidelines_has_name",
+            value="no",
+            rationale=f"Guidelines() calls missing 'name' parameter: {', '.join(missing_name)}"
+        )
+
+    return Feedback(
+        name="guidelines_has_name",
+        value="yes",
+        rationale=f"All {len(guidelines_calls)} Guidelines calls include 'name' parameter"
+    )
+
+
+@scorer
+def returns_valid_feedback(outputs) -> Feedback:
+    """
+    Check if scorers return valid types: Feedback, bool, int, float, str.
+
+    CORRECT:   return Feedback(value=True, rationale="...")
+    CORRECT:   return True, return 0.85, return "yes"
+    WRONG:     return {"score": 0.5}
+    """
+    response = str(outputs.get("response", ""))
+    code = extract_all_code(response)
+
+    if not code:
+        return Feedback(
+            name="returns_valid_feedback",
+            value="skip",
+            rationale="No code blocks found"
+        )
+
+    # Look for custom scorer definitions
+    scorer_funcs = re.findall(
+        r'@scorer.*?def\s+(\w+)\s*\([^)]*\).*?return\s+(.+?)(?:\n|$)',
+        code,
+        re.DOTALL
+    )
+
+    if not scorer_funcs:
+        return Feedback(
+            name="returns_valid_feedback",
+            value="skip",
+            rationale="No custom scorers with return statements found"
+        )
+
+    invalid_returns = []
+    for func_name, return_expr in scorer_funcs:
+        # Check for dict return (common mistake)
+        if re.search(r'\{[^}]*["\']score["\']', return_expr):
+            invalid_returns.append(f"{func_name}: returns dict")
+
+    if invalid_returns:
+        return Feedback(
+            name="returns_valid_feedback",
+            value="no",
+            rationale=f"Invalid return types found: {'; '.join(invalid_returns)}"
+        )
+
+    return Feedback(
+        name="returns_valid_feedback",
+        value="yes",
+        rationale=f"All {len(scorer_funcs)} scorers return valid types"
+    )
+
+
+@scorer
+def trace_search_uses_attributes(outputs) -> Feedback:
+    """
+    Check if trace search uses 'attributes.' prefix in filter strings.
+
+    CORRECT:   mlflow.search_traces("attributes.status = 'OK'")
+    WRONG:     mlflow.search_traces("status = 'OK'")
+    """
+    response = str(outputs.get("response", ""))
+    code = extract_all_code(response)
+
+    if not code or "search_traces" not in code:
+        return Feedback(
+            name="trace_search_uses_attributes",
+            value="skip",
+            rationale="No search_traces() call found"
+        )
+
+    # Find search_traces calls with filter strings
+    search_calls = re.findall(
+        r'search_traces\s*\([^)]*["\']([^"\']+)["\'][^)]*\)',
+        code
+    )
+
+    if not search_calls:
+        return Feedback(
+            name="trace_search_uses_attributes",
+            value="skip",
+            rationale="No search_traces() filter strings found"
+        )
+
+    missing_prefix = []
+    for i, filter_str in enumerate(search_calls):
+        # Check for common attribute names without 'attributes.' prefix
+        if re.search(r'\b(status|span_type|name)\s*=', filter_str) and \
+           'attributes.' not in filter_str:
+            missing_prefix.append(f"call {i+1}: '{filter_str[:50]}'")
+
+    if missing_prefix:
+        return Feedback(
+            name="trace_search_uses_attributes",
+            value="no",
+            rationale=f"search_traces filters missing 'attributes.' prefix: {'; '.join(missing_prefix)}"
+        )
+
+    return Feedback(
+        name="trace_search_uses_attributes",
+        value="yes",
+        rationale=f"All {len(search_calls)} search_traces calls use proper 'attributes.' prefix"
+    )
+
+
 @scorer(aggregations=["mean", "min", "max"])
 def code_block_count(outputs) -> int:
     """Count the number of Python code blocks in the response."""
@@ -258,79 +456,6 @@ def code_block_count(outputs) -> int:
     return len(blocks)
 
 
-# =============================================================================
-# Tier 2: make_judge with Curated References (Lazy Factory)
-# =============================================================================
-
-# Key gotchas extracted from GOTCHAS.md for make_judge grounding
-KEY_GOTCHAS = """
-MLflow 3 GenAI API Critical Requirements:
-
-1. EVALUATE FUNCTION: Use mlflow.genai.evaluate() NOT mlflow.evaluate()
-   - mlflow.evaluate() is deprecated for GenAI evaluation
-
-2. DATA STRUCTURE: Must use nested format with 'inputs' key
-   - CORRECT: {"inputs": {"query": "..."}}
-   - WRONG: {"query": "..."} (flat structure)
-
-3. PREDICT_FN SIGNATURE: Receives unpacked kwargs, not a dict
-   - CORRECT: def my_app(query, context=None)
-   - WRONG: def my_app(inputs)
-
-4. SCORER DECORATOR: Custom scorers must use @scorer decorator
-   - CORRECT: @scorer def my_scorer(outputs): ...
-   - WRONG: def my_scorer(outputs): ... (missing decorator)
-
-5. GUIDELINES SCORER: Requires both 'name' and 'guidelines' parameters
-   - CORRECT: Guidelines(name="check", guidelines="...")
-   - WRONG: Guidelines(guidelines="...") (missing name)
-
-6. FEEDBACK RETURNS: Scorers return Feedback objects or primitives
-   - CORRECT: return Feedback(value=True, rationale="...")
-   - CORRECT: return True, return 0.85, return "yes"
-   - WRONG: return {"score": 0.5} (dict not allowed)
-
-7. AGGREGATIONS: Only these 6 are valid: min, max, mean, median, variance, p90
-   - WRONG: p50, p99, sum (not valid)
-
-8. TRACE SEARCH: Use attributes. prefix and single quotes
-   - CORRECT: mlflow.search_traces("attributes.status = 'OK'")
-   - WRONG: mlflow.search_traces("status = 'OK'") (missing prefix)
-"""
-
-
-def _create_tier2_scorers(model: str) -> list:
-    """
-    Create Tier 2 make_judge scorers with configured model.
-
-    Args:
-        model: Model endpoint (e.g., "databricks:/databricks-gpt-5-2")
-
-    Returns:
-        List of make_judge scorer instances
-    """
-    api_correctness_judge = make_judge(
-        name="api_correctness",
-        model=model,
-        instructions=f"""
-You are evaluating if generated Python code follows MLflow 3 GenAI best practices.
-
-Reference Documentation (CRITICAL - use this as ground truth):
-{KEY_GOTCHAS}
-
-Code to evaluate:
-{{{{ outputs }}}}
-
-Evaluation criteria:
-1. Check if the code avoids the common mistakes listed above
-2. Verify correct API usage patterns
-3. Look for any deprecated or incorrect patterns
-
-Return 'yes' if the code follows best practices, 'no' if any mistakes are found.
-Provide a brief rationale explaining your assessment.
-"""
-    )
-    return [api_correctness_judge]
 
 
 # =============================================================================
@@ -338,44 +463,75 @@ Provide a brief rationale explaining your assessment.
 # =============================================================================
 
 # Guidelines text constants (for reuse)
+# NOTE: Guidelines scorer returns yes/no/na - criteria are lenient to avoid false negatives
 CODE_QUALITY_GUIDELINES = """
-Evaluate the quality of the generated code:
+Evaluate if the code is clean and well-organized.
 
-1. COMPLETENESS: Code is complete and runnable (no placeholders like '...' or 'TODO')
-2. IMPORTS: All necessary imports are included at the top of the code
-3. NAMING: Variable and function names are descriptive and follow Python conventions
-4. STRUCTURE: Code is well-organized with appropriate functions/classes
-5. DOCUMENTATION: Functions have docstrings or comments where helpful
+Rate 'yes' if the code:
+- Is syntactically valid Python
+- Uses reasonably descriptive variable/function names
+- Has appropriate structure (functions or classes where helpful)
+- Includes at least basic docstrings or comments
 
-Rate as 'yes' if the code meets most of these criteria, 'no' otherwise.
+Rate 'no' only if:
+- Code has syntax errors
+- Code is severely disorganized or unreadable
+- Names are completely unclear (single letters everywhere)
+
+Most working code with docstrings should pass. Don't penalize for minor style issues.
 """
 
 RESPONSE_COMPLETENESS_GUIDELINES = """
-Evaluate if the response fully addresses the user's request:
+Evaluate if the response addresses the user's request with usable code.
 
-1. ADDRESSES REQUEST: The response directly answers what was asked
-2. WORKING EXAMPLE: Includes a complete, working code example
-3. EXPLANATION: Code is accompanied by helpful explanation or context
-4. BEST PRACTICES: Follows recommended patterns for the task
+Rate 'yes' if:
+- Code addresses the user's request
+- Code is syntactically complete (has imports, no placeholders like ... or TODO)
+- Code has docstrings or comments explaining what it does
 
-Rate as 'yes' if the response is complete and helpful, 'no' otherwise.
+Rate 'no' only if:
+- Code has placeholders (... or TODO) instead of actual implementation
+- Missing critical imports that would prevent the code from running
+- Doesn't solve the requested task
+
+IMPORTANT: Don't penalize for:
+- Missing installation instructions (pip install)
+- Not including extensive tutorials or usage guides
+- Using simplified example data
+- Not being "production-grade"
+- Using hardcoded values for demonstration purposes
+
+Most complete code examples should pass.
 """
 
 EXPLANATION_CLARITY_GUIDELINES = """
-Evaluate the clarity of explanations in the response:
+Evaluate if the response explains the code adequately.
 
-1. CLEAR LANGUAGE: Uses clear, concise language
-2. APPROPRIATE DETAIL: Provides enough detail without being overwhelming
-3. LOGICAL FLOW: Information is presented in a logical order
-4. HIGHLIGHTS IMPORTANT: Key points or gotchas are clearly highlighted
+Rate 'yes' if:
+- Code has docstrings explaining what functions do
+- The response includes any explanation of what the code does
+- The overall intent is clear from reading the code and comments
 
-Rate as 'yes' if explanations are clear and helpful, 'no' otherwise.
+Rate 'no' only if:
+- No explanation whatsoever (no docstrings, no comments, no text)
+- Explanation is confusing or contradicts the code
+- Critical information is missing that makes the code incomprehensible
+
+IMPORTANT: Code-heavy responses don't need extensive prose. Docstrings and
+inline comments count as explanation. Self-documenting code with clear
+function names is acceptable.
+
+Most responses with docstrings should pass.
 """
 
 
 def _create_tier3_scorers(model: str) -> list:
     """
     Create Tier 3 Guidelines scorers with configured model.
+
+    Uses lenient yes/no criteria to avoid false negatives on good code.
+    Guidelines explicitly state what NOT to penalize (e.g., missing install
+    instructions, simplified example data, not being production-grade).
 
     Args:
         model: Model endpoint (e.g., "databricks:/databricks-gpt-5-2")
@@ -404,6 +560,10 @@ TIER1_SCORERS = [
     has_nested_inputs,
     has_scorer_decorator,
     uses_valid_aggregations,
+    predict_fn_unpacks_kwargs,
+    guidelines_has_name,
+    returns_valid_feedback,
+    trace_search_uses_attributes,
     code_block_count,
 ]
 
@@ -416,11 +576,11 @@ def get_scorers(preset: str = "full", model: str = None) -> list:
     Get a preset collection of scorers.
 
     Tier 1 scorers are deterministic (no LLM needed).
-    Tier 2 and 3 scorers require an LLM and are created lazily with the specified model.
+    Tier 3 scorers require an LLM and are created lazily with the specified model.
 
     Args:
-        preset: One of "full", "quick", "tier1", "tier2", "tier3"
-        model: LLM model for Tier 2/3 scorers (default: from env or databricks:/databricks-gpt-5-2)
+        preset: One of "full", "quick", "tier1", "tier3"
+        model: LLM model for Tier 3 scorers (default: from env or databricks:/databricks-gpt-5-2)
 
     Returns:
         List of scorer objects
@@ -434,21 +594,16 @@ def get_scorers(preset: str = "full", model: str = None) -> list:
     if preset == "tier1":
         return TIER1_SCORERS
 
-    if preset == "tier2":
-        return _create_tier2_scorers(model)
-
     if preset == "tier3":
         return _create_tier3_scorers(model)
 
     if preset in ("full", "all"):
-        tier2 = _create_tier2_scorers(model)
         tier3 = _create_tier3_scorers(model)
-        return [SAFETY_SCORER] + TIER1_SCORERS + tier2 + tier3
+        return [SAFETY_SCORER] + TIER1_SCORERS + tier3
 
     # Default to full
-    tier2 = _create_tier2_scorers(model)
     tier3 = _create_tier3_scorers(model)
-    return [SAFETY_SCORER] + TIER1_SCORERS + tier2 + tier3
+    return [SAFETY_SCORER] + TIER1_SCORERS + tier3
 
 
 if __name__ == "__main__":
@@ -461,9 +616,6 @@ if __name__ == "__main__":
         name = getattr(s, "name", getattr(s, "__name__", str(s)))
         print(f"  - {name}")
 
-    print(f"\nTier 2 (make_judge): Created lazily with model parameter")
-    print("  - api_correctness")
-
     print(f"\nTier 3 (Guidelines): Created lazily with model parameter")
     print("  - code_quality")
     print("  - response_completeness")
@@ -472,6 +624,5 @@ if __name__ == "__main__":
     print(f"\nPresets:")
     print("  quick: Safety + Tier 1 (no LLM needed)")
     print("  tier1: Tier 1 only")
-    print("  tier2: Tier 2 only (requires LLM)")
     print("  tier3: Tier 3 only (requires LLM)")
-    print("  full:  Safety + Tier 1 + Tier 2 + Tier 3")
+    print("  full:  Safety + Tier 1 + Tier 3")

@@ -17,8 +17,12 @@ from pathlib import Path
 from typing import Optional
 import os
 
+from dotenv import load_dotenv
 import mlflow
 import mlflow.genai
+
+# Load .env file for local development
+load_dotenv()
 
 # Add parent directory for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -63,10 +67,12 @@ def setup_databricks_auth(require_llm: bool = False) -> bool:
     # Auth not configured
     if require_llm:
         raise ValueError(
-            "Databricks authentication required for LLM-based scorers (Tier 2/3).\n"
+            "Databricks authentication required for LLM-based scorers (Tier 3).\n"
             "Set environment variables:\n"
             "  DATABRICKS_HOST=https://your-workspace.cloud.databricks.com\n"
             "  DATABRICKS_TOKEN=dapi...  (or DATABRICKS_CONFIG_PROFILE=default)\n"
+            "\n"
+            "Note: .env files are not auto-loaded. Use 'source .env' or 'export $(cat .env | xargs)' first.\n"
             "\n"
             "Or use --preset quick to skip LLM scorers."
         )
@@ -144,7 +150,7 @@ class SkillEvaluationPipeline:
         self.setup_mlflow()
 
         # Check if preset requires LLM and validate auth
-        requires_llm = self.config.scorer_preset in ("full", "tier2", "tier3", "all")
+        requires_llm = self.config.scorer_preset in ("full", "tier3", "all")
         if requires_llm:
             setup_databricks_auth(require_llm=True)
 

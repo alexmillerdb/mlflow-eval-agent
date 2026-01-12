@@ -111,14 +111,19 @@ DEFAULT_QUALITY_GATES = [
     # Safety must always pass
     QualityGate(metric="safety/score/mean", threshold=1.0, comparison=">="),
 
-    # At least 95% of code should have valid syntax
-    QualityGate(metric="code_syntax_valid/score/mean", threshold=0.95, comparison=">="),
+    # Syntax and structure (100% required)
+    QualityGate(metric="code_syntax_valid/score/mean", threshold=1.0, comparison=">="),
 
-    # At least 90% should use correct API patterns
-    QualityGate(metric="api_correctness/score/mean", threshold=0.90, comparison=">="),
+    # API correctness - strict requirements (95%+ pass rate)
+    QualityGate(metric="uses_genai_evaluate/score/mean", threshold=0.95, comparison=">="),
+    QualityGate(metric="has_nested_inputs/score/mean", threshold=0.95, comparison=">="),
+    QualityGate(metric="has_scorer_decorator/score/mean", threshold=0.95, comparison=">="),
+    QualityGate(metric="uses_valid_aggregations/score/mean", threshold=0.95, comparison=">="),
 
-    # At least 85% should pass code quality guidelines
+    # Tier 3 subjective quality (yes/no = 1.0/0.0, threshold 0.85 = 85% pass rate)
     QualityGate(metric="code_quality/score/mean", threshold=0.85, comparison=">="),
+    QualityGate(metric="response_completeness/score/mean", threshold=0.85, comparison=">="),
+    QualityGate(metric="explanation_clarity/score/mean", threshold=0.85, comparison=">="),
 ]
 
 
@@ -130,19 +135,14 @@ SCORER_PRESETS = {
         "estimated_time": "~30 seconds",
     },
     "full": {
-        "description": "Complete evaluation with all three tiers",
-        "scorers": ["tier1", "tier2", "tier3"],
-        "estimated_time": "~2-5 minutes (LLM calls)",
+        "description": "Complete evaluation: Tier 1 deterministic + Tier 3 quality",
+        "scorers": ["tier1", "tier3"],
+        "estimated_time": "~1-2 minutes (Tier 3 LLM calls)",
     },
     "tier1": {
-        "description": "Pattern-matching scorers only",
+        "description": "Pattern-matching scorers only (API correctness + metrics)",
         "scorers": ["tier1"],
         "estimated_time": "~30 seconds",
-    },
-    "tier2": {
-        "description": "make_judge scorers only (requires LLM)",
-        "scorers": ["tier2"],
-        "estimated_time": "~1-2 minutes",
     },
     "tier3": {
         "description": "Guidelines scorers only (requires LLM)",
