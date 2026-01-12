@@ -192,6 +192,54 @@ api_correctness_judge = make_judge(
 | `tool_selection_accuracy` | Trace-based - correct tools were called |
 | `skill_execution_latency` | Performance tracking with aggregations |
 
+#### Three-Tier Scoring Strategy
+
+For skill benchmarks, use a tiered approach that matches scorer types to evaluation needs:
+
+| Tier | Scorer Type | Use For | Example |
+|------|-------------|---------|---------|
+| 1 | Pattern-matching (`@scorer`) | Deterministic checks | `code_syntax_valid`, `uses_genai_evaluate` |
+| 2 | `make_judge` with curated refs | API correctness grounded in skill docs | `api_correctness_judge` with KEY_GOTCHAS |
+| 3 | `Guidelines` | Subjective quality assessment | `code_quality`, `response_completeness` |
+
+**Why this approach:**
+- **Tier 1** catches objective errors deterministically (no LLM variability)
+- **Tier 2** uses LLM judgment but grounded in actual skill documentation
+- **Tier 3** handles subjective quality where LLM judgment is appropriate
+
+**Curated References for make_judge:**
+
+The key insight is that `make_judge` can be grounded in skill documentation by extracting
+key points from reference files (e.g., GOTCHAS.md) and embedding them directly in the
+judge instructions:
+
+```python
+# Curated from .claude/skills/mlflow-evaluation/references/GOTCHAS.md
+KEY_GOTCHAS = """
+- Use mlflow.genai.evaluate() NOT mlflow.evaluate() (deprecated)
+- Data requires nested structure: {"inputs": {"query": "..."}}
+- predict_fn receives unpacked kwargs: predict_fn(**inputs)
+- Valid aggregations: min, max, mean, median, variance, p90 (NOT p50, p99, sum)
+"""
+
+api_correctness_judge = make_judge(
+    name="api_correctness",
+    instructions=f"""
+    Evaluate if the generated code follows MLflow 3 GenAI best practices.
+
+    Reference (from skill documentation):
+    {KEY_GOTCHAS}
+
+    Code to evaluate: {{{{ outputs }}}}
+
+    Return 'yes' if correct, 'no' if any gotchas are violated.
+    """
+)
+```
+
+This gives the LLM judge the "ground truth" without sending entire reference files,
+providing flexibility while staying grounded in authoritative documentation.
+
 ### 5. Evaluation Pipeline (MLflow 3 + Databricks)
 
 ```
@@ -663,25 +711,25 @@ def build_eval_dataset(self, include_ground_truth: bool = True) -> list[dict]:
 
 ## Implementation Plan
 
-### Phase 1: `/skill-test` Command (Build First)
+### Phase 1: `/skill-test` Command (Build First) ✅ COMPLETE
 Build the ground truth generation tool first so we can use it to create evaluation data.
 
-- [ ] Create `/skill-test` skill at `.claude/skills/skill-test/SKILL.md`
-- [ ] Define workflow: load skill → get prompt → generate → execute → save
-- [ ] Create `GroundTruthExample` dataclass template
-- [ ] Test with mlflow-evaluation skill to generate initial ground truth
+- [x] Create `/skill-test` skill at `.claude/skills/skill-test/SKILL.md`
+- [x] Define workflow: load skill → get prompt → generate → execute → save
+- [x] Create `GroundTruthExample` dataclass template
+- [x] Test with mlflow-evaluation skill to generate initial ground truth
 
-### Phase 2: Generate Ground Truth Dataset
+### Phase 2: Generate Ground Truth Dataset ✅ COMPLETE
 Use `/skill-test` to build verified examples for mlflow-evaluation skill.
 
-- [ ] Create `benchmarks/skills/mlflow-evaluation/` structure
-- [ ] Run `/skill-test mlflow-evaluation` with various prompts:
+- [x] Create `benchmarks/skills/mlflow-evaluation/` structure
+- [x] Run `/skill-test mlflow-evaluation` with various prompts:
   - Basic evaluation script generation
   - Custom scorer creation
   - Dataset building from traces
   - Guidelines scorer usage
-- [ ] Save passing examples to `ground_truth.py`
-- [ ] Aim for 10-20 verified working examples
+- [x] Save passing examples to `ground_truth.yaml` (12 verified examples)
+- [x] Aim for 10-20 verified working examples
 
 ### Phase 3: Benchmark Infrastructure
 Build the evaluation framework that consumes ground truth.

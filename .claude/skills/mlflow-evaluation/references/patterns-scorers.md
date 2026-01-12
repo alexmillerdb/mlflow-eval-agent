@@ -16,7 +16,7 @@ Working code patterns for creating and using scorers in MLflow 3 GenAI.
 | 8 | [Trace-Based Scorer](#pattern-8-trace-based-scorer) | Analyze execution details |
 | 9 | [Class-Based Scorer](#pattern-9-class-based-scorer-with-configuration) | Configurable/stateful scorers |
 | 10 | [Conditional Scoring](#pattern-10-conditional-scoring-based-on-input) | Different rules per input type |
-| 11 | [Aggregations](#pattern-11-scorer-with-aggregations) | Numeric stats (mean, p50, p90) |
+| 11 | [Aggregations](#pattern-11-scorer-with-aggregations) | Numeric stats (mean, median, p90) |
 | 12 | [Custom Make Judge](#pattern-12-custom-make-judge) | Complex multi-level evaluation |
 | 13 | [Per-Stage Accuracy](#pattern-13-per-stagecomponent-accuracy-scorer) | Multi-agent component verification |
 | 14 | [Tool Selection Accuracy](#pattern-14-tool-selection-accuracy-scorer) | Verify correct tools called |
@@ -457,17 +457,20 @@ Use for numeric scorers that need aggregate statistics.
 ```python
 from mlflow.genai.scorers import scorer
 
-@scorer(aggregations=["mean", "min", "max", "p50", "p90"])
+@scorer(aggregations=["mean", "min", "max", "median", "p90"])
 def response_latency(outputs) -> float:
     """Return response generation time."""
     return outputs.get("latency_ms", 0) / 1000.0  # Convert to seconds
 
-@scorer(aggregations=["mean", "sum"])
+@scorer(aggregations=["mean", "min", "max"])
 def token_count(outputs) -> int:
     """Return token count from response."""
     response = str(outputs.get("response", ""))
     # Rough token estimate
     return len(response.split())
+
+# Valid aggregations: min, max, mean, median, variance, p90
+# NOTE: p50, p99, sum are NOT valid - use median instead of p50
 ```
 
 ---
