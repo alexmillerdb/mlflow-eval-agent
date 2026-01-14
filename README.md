@@ -2,6 +2,10 @@
 
 An autonomous agent for analyzing MLflow traces and building evaluation suites. Deploys to Databricks via Asset Bundles.
 
+## Blog Post
+
+**[From Traces to Evaluation: An Autonomous MLflow Agent Harness for AI AgentOps](https://community.databricks.com/t5/technical-blog/from-traces-to-evaluation-an-autonomous-mlflow-agent-harness-for/ba-p/143422)** - Deep dive into the architecture, capabilities, and how to get started.
+
 ## What It Does
 
 The agent runs an autonomous loop that:
