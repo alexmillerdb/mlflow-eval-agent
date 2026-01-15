@@ -731,26 +731,26 @@ Use `/skill-test` to build verified examples for mlflow-evaluation skill.
 - [x] Save passing examples to `ground_truth.yaml` (12 verified examples)
 - [x] Aim for 10-20 verified working examples
 
-### Phase 3: Benchmark Infrastructure
+### Phase 3: Benchmark Infrastructure ✅ COMPLETE
 Build the evaluation framework that consumes ground truth.
 
-- [ ] Define Python module templates (`config.py`, `test_cases.py`, `scorers.py`)
-- [ ] Implement `init` command to scaffold benchmark for any skill
-- [ ] Create reusable Guidelines scorers (`code_quality`, `skill_adherence`)
-- [ ] Create custom judge with `make_judge()` for API correctness
-- [ ] Implement `code_syntax_valid` scorer (AST parsing)
+- [x] Define Python module templates (`config.py`, `test_cases.py`, `scorers.py`)
+- [x] Implement `init` command to scaffold benchmark for any skill
+- [x] Create reusable Guidelines scorers (`code_quality`, `skill_adherence`)
+- [x] Create deterministic scorers for API correctness (replaced `make_judge()` for reliability)
+- [x] Implement `code_syntax_valid` scorer (AST parsing)
 
-### Phase 4: Evaluation Pipeline
-- [ ] Implement `SkillEvaluationPipeline` class
-- [ ] Load ground truth + traced examples into dataset
-- [ ] Run `mlflow.genai.evaluate()` with scorers
-- [ ] Log results to Databricks experiment
+### Phase 4: Evaluation Pipeline ✅ COMPLETE
+- [x] Implement `SkillEvaluationPipeline` class
+- [x] Load ground truth + traced examples into dataset
+- [x] Run `mlflow.genai.evaluate()` with scorers
+- [x] Log results to Databricks experiment
 
-### Phase 5: CLI and Baseline Management
-- [ ] CLI entry points (`run`, `compare`, `regression`, `init`)
-- [ ] Baseline save/load functionality
-- [ ] Regression detection logic
-- [ ] Run first evaluation on mlflow-evaluation skill
+### Phase 5: CLI and Baseline Management ✅ COMPLETE
+- [x] CLI entry points (`run`, `regression`, `init`) - `compare` command deferred
+- [x] Baseline save/load functionality
+- [x] Regression detection logic
+- [x] Run first evaluation on mlflow-evaluation skill
 
 ---
 

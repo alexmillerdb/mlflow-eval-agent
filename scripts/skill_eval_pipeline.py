@@ -238,7 +238,7 @@ class SkillEvaluationPipeline:
             raise ValueError("No results available. Run evaluation first.")
 
         if baseline_path is None:
-            baseline_dir = Path(__file__).parent.parent / "benchmarks" / "skills" / "mlflow-evaluation" / "baselines"
+            baseline_dir = Path(__file__).parent.parent / "benchmarks" / "skills" / "mlflow_evaluation" / "baselines"
             baseline_dir.mkdir(exist_ok=True)
             baseline_path = baseline_dir / "current.json"
 
@@ -267,7 +267,7 @@ class SkillEvaluationPipeline:
             Baseline dict or None if not found
         """
         if baseline_path is None:
-            baseline_path = Path(__file__).parent.parent / "benchmarks" / "skills" / "mlflow-evaluation" / "baselines" / "current.json"
+            baseline_path = Path(__file__).parent.parent / "benchmarks" / "skills" / "mlflow_evaluation" / "baselines" / "current.json"
 
         if not Path(baseline_path).exists():
             print(f"No baseline found at: {baseline_path}")
