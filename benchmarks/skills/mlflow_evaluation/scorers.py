@@ -17,6 +17,20 @@ from mlflow.entities import Feedback
 # Helper Functions
 # =============================================================================
 
+def get_response_text(outputs) -> str:
+    """Extract response text from outputs.
+
+    Handles both formats:
+    - String: outputs = "response text" (MLflow standard)
+    - Dict: outputs = {"response": "text"} (legacy format)
+    """
+    if isinstance(outputs, str):
+        return outputs
+    if isinstance(outputs, dict):
+        return str(outputs.get("response", ""))
+    return str(outputs) if outputs else ""
+
+
 def extract_code_blocks(response: str) -> list[str]:
     """Extract Python code blocks from markdown response."""
     # Match ```python ... ``` blocks
@@ -47,7 +61,7 @@ def extract_all_code(response: str) -> str:
 @scorer
 def code_syntax_valid(outputs) -> Feedback:
     """Check if all Python code blocks in the response have valid syntax."""
-    response = str(outputs.get("response", ""))
+    response = get_response_text(outputs)
     blocks = extract_code_blocks(response)
 
     if not blocks:
@@ -81,7 +95,7 @@ def code_syntax_valid(outputs) -> Feedback:
 @scorer
 def uses_genai_evaluate(outputs) -> Feedback:
     """Check if code uses mlflow.genai.evaluate() (not deprecated mlflow.evaluate())."""
-    response = str(outputs.get("response", ""))
+    response = get_response_text(outputs)
     code = extract_all_code(response)
 
     if not code:
@@ -119,7 +133,7 @@ def uses_genai_evaluate(outputs) -> Feedback:
 @scorer
 def has_nested_inputs(outputs) -> Feedback:
     """Check if evaluation data uses proper nested {"inputs": {...}} structure."""
-    response = str(outputs.get("response", ""))
+    response = get_response_text(outputs)
     code = extract_all_code(response)
 
     if not code:
@@ -165,7 +179,7 @@ def has_nested_inputs(outputs) -> Feedback:
 @scorer
 def has_scorer_decorator(outputs) -> Feedback:
     """Check if custom scorers use the @scorer decorator."""
-    response = str(outputs.get("response", ""))
+    response = get_response_text(outputs)
     code = extract_all_code(response)
 
     if not code:
@@ -205,7 +219,7 @@ def has_scorer_decorator(outputs) -> Feedback:
 @scorer
 def uses_valid_aggregations(outputs) -> Feedback:
     """Check if aggregations use valid names (min, max, mean, median, variance, p90)."""
-    response = str(outputs.get("response", ""))
+    response = get_response_text(outputs)
     code = extract_all_code(response)
 
     if not code:
@@ -256,7 +270,7 @@ def predict_fn_unpacks_kwargs(outputs) -> Feedback:
     CORRECT:   def my_app(query, context=None)
     WRONG:     def my_app(inputs)
     """
-    response = str(outputs.get("response", ""))
+    response = get_response_text(outputs)
     code = extract_all_code(response)
 
     if not code or "predict_fn" not in response.lower():
@@ -304,7 +318,7 @@ def guidelines_has_name(outputs) -> Feedback:
     CORRECT:   Guidelines(name="check", guidelines="...")
     WRONG:     Guidelines(guidelines="...")
     """
-    response = str(outputs.get("response", ""))
+    response = get_response_text(outputs)
     code = extract_all_code(response)
 
     if not code or "Guidelines" not in code:
@@ -352,7 +366,7 @@ def returns_valid_feedback(outputs) -> Feedback:
     CORRECT:   return True, return 0.85, return "yes"
     WRONG:     return {"score": 0.5}
     """
-    response = str(outputs.get("response", ""))
+    response = get_response_text(outputs)
     code = extract_all_code(response)
 
     if not code:
@@ -404,7 +418,7 @@ def trace_search_uses_attributes(outputs) -> Feedback:
     CORRECT:   mlflow.search_traces("attributes.status = 'OK'")
     WRONG:     mlflow.search_traces("status = 'OK'")
     """
-    response = str(outputs.get("response", ""))
+    response = get_response_text(outputs)
     code = extract_all_code(response)
 
     if not code or "search_traces" not in code:
@@ -451,7 +465,7 @@ def trace_search_uses_attributes(outputs) -> Feedback:
 @scorer(aggregations=["mean", "min", "max"])
 def code_block_count(outputs) -> int:
     """Count the number of Python code blocks in the response."""
-    response = str(outputs.get("response", ""))
+    response = get_response_text(outputs)
     blocks = extract_code_blocks(response)
     return len(blocks)
 
@@ -567,29 +581,29 @@ TIER1_SCORERS = [
     code_block_count,
 ]
 
-# Safety scorer (always include)
-SAFETY_SCORER = Safety()
-
-
 def get_scorers(preset: str = "full", model: str = None) -> list:
     """
     Get a preset collection of scorers.
 
     Tier 1 scorers are deterministic (no LLM needed).
-    Tier 3 scorers require an LLM and are created lazily with the specified model.
+    Safety and Tier 3 scorers require an LLM and are created lazily with the specified model.
 
     Args:
         preset: One of "full", "quick", "tier1", "tier3"
-        model: LLM model for Tier 3 scorers (default: from env or databricks:/databricks-gpt-5-2)
+        model: LLM model for Safety and Tier 3 scorers (default: from env or databricks:/databricks-gpt-5-2)
 
     Returns:
         List of scorer objects
     """
     model = model or DEFAULT_JUDGE_MODEL
 
+    # Create Safety scorer with explicit model to avoid malformed URI
+    # (MLflow default is just "databricks" when tracking_uri=databricks, which is invalid)
+    safety_scorer = Safety(model=model)
+
     # Build scorer list based on preset
     if preset == "quick":
-        return [SAFETY_SCORER] + TIER1_SCORERS
+        return [safety_scorer] + TIER1_SCORERS
 
     if preset == "tier1":
         return TIER1_SCORERS
@@ -599,11 +613,11 @@ def get_scorers(preset: str = "full", model: str = None) -> list:
 
     if preset in ("full", "all"):
         tier3 = _create_tier3_scorers(model)
-        return [SAFETY_SCORER] + TIER1_SCORERS + tier3
+        return [safety_scorer] + TIER1_SCORERS + tier3
 
     # Default to full
     tier3 = _create_tier3_scorers(model)
-    return [SAFETY_SCORER] + TIER1_SCORERS + tier3
+    return [safety_scorer] + TIER1_SCORERS + tier3
 
 
 if __name__ == "__main__":
