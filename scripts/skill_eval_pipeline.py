@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from benchmarks.skills.mlflow_evaluation.ground_truth import load_ground_truth
 from benchmarks.skills.mlflow_evaluation.config import BenchmarkConfig, get_config
 from benchmarks.skills.mlflow_evaluation.scorers import get_scorers
+from benchmarks.skills.mlflow_evaluation.dataset import DatasetSource
 
 
 def setup_databricks_auth(require_llm: bool = False) -> bool:
@@ -102,29 +103,36 @@ class SkillEvaluationPipeline:
         print(f"Loaded {len(self.ground_truth)} ground truth examples")
         return self.ground_truth
 
-    def build_eval_dataset(self) -> list[dict]:
+    def build_eval_dataset(self):
         """
-        Build evaluation dataset from ground truth examples.
+        Build evaluation dataset from configured source.
 
-        Converts GroundTruthExample objects to MLflow evaluation format:
-        {
-            "inputs": {"prompt": "..."},
-            "outputs": {"response": "..."},
-        }
+        Uses DatasetSource abstraction to load from:
+        - Local YAML file (default for local development)
+        - Unity Catalog MLflow-managed dataset (in Databricks)
+
+        Returns either a list[dict] (YAML) or mlflow.genai.Dataset (UC).
         """
-        if not self.ground_truth:
-            self.load_ground_truth()
+        # Use DatasetSource abstraction for auto-detection
+        self.eval_dataset = DatasetSource.auto(
+            source=self.config.data_source,
+            uc_table_name=self.config.uc_table_name,
+            tags=self.config.dataset_tags,
+        )
 
-        self.eval_dataset = []
-        for example in self.ground_truth:
-            record = example.to_eval_record()
-            self.eval_dataset.append(record)
+        # Handle list vs Dataset for max_examples limit
+        if isinstance(self.eval_dataset, list):
+            # Apply max_examples limit if configured
+            if self.config.max_examples is not None:
+                self.eval_dataset = self.eval_dataset[:self.config.max_examples]
+            dataset_size = len(self.eval_dataset)
+        else:
+            # UC Dataset - get size from DataFrame
+            dataset_size = len(self.eval_dataset.to_df())
+            if self.config.max_examples is not None:
+                print(f"Note: max_examples limit not applied to UC dataset (has {dataset_size} rows)")
 
-        # Apply max_examples limit if configured
-        if self.config.max_examples is not None:
-            self.eval_dataset = self.eval_dataset[:self.config.max_examples]
-
-        print(f"Built evaluation dataset with {len(self.eval_dataset)} examples")
+        print(f"Built evaluation dataset with {dataset_size} examples")
         return self.eval_dataset
 
     def setup_mlflow(self):
@@ -166,7 +174,9 @@ class SkillEvaluationPipeline:
             run_name = f"{self.config.skill_name}_v{self.config.skill_version}_{timestamp}"
 
         print(f"\nRunning evaluation: {run_name}")
-        print(f"Dataset size: {len(self.eval_dataset)} examples")
+        # Get dataset size (handles both list and EvaluationDataset)
+        dataset_size = len(self.eval_dataset) if isinstance(self.eval_dataset, list) else len(self.eval_dataset.to_df())
+        print(f"Dataset size: {dataset_size} examples")
         print("-" * 50)
 
         with mlflow.start_run(run_name=run_name):
@@ -181,7 +191,7 @@ class SkillEvaluationPipeline:
             )
 
             # Log additional metadata
-            mlflow.log_param("num_examples", len(self.eval_dataset))
+            mlflow.log_param("num_examples", dataset_size)
             mlflow.log_param("scorer_preset", self.config.scorer_preset)
             mlflow.log_param("num_scorers", len(scorers))
 
@@ -349,6 +359,8 @@ def run_pipeline(
     check_gates: bool = True,
     save_baseline: bool = False,
     compare_baseline: bool = False,
+    data_source: str = "auto",
+    uc_table_name: Optional[str] = None,
 ) -> SkillEvaluationPipeline:
     """
     Convenience function to run the full evaluation pipeline.
@@ -361,6 +373,8 @@ def run_pipeline(
         check_gates: Whether to check quality gates
         save_baseline: Whether to save results as new baseline
         compare_baseline: Whether to compare to existing baseline
+        data_source: Dataset source ("auto", "yaml", "uc")
+        uc_table_name: Unity Catalog table name (None = use env)
 
     Returns:
         SkillEvaluationPipeline instance with results
@@ -370,10 +384,11 @@ def run_pipeline(
         version=version,
         max_examples=max_examples,
         judge_model=judge_model,
+        data_source=data_source,
+        uc_table_name=uc_table_name,
     )
 
     pipeline = SkillEvaluationPipeline(config)
-    pipeline.load_ground_truth()
     pipeline.build_eval_dataset()
     pipeline.run_evaluation()
     pipeline.print_metrics()
