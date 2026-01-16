@@ -35,6 +35,7 @@ def cmd_run(args):
     from scripts.skill_eval_pipeline import run_pipeline, SkillEvaluationPipeline
     from benchmarks.skills.mlflow_evaluation.config import get_config, SCORER_PRESETS
     from benchmarks.skills.mlflow_evaluation.scorers import get_scorers
+    from benchmarks.skills.mlflow_evaluation.dataset import DatasetSource
 
     print(f"\n{'='*60}")
     print(f"Skill Benchmark: {args.skill}")
@@ -52,6 +53,8 @@ def cmd_run(args):
         version=args.version,
         max_examples=args.max_examples,
         judge_model=args.model,
+        data_source=args.data_source,
+        uc_table_name=args.uc_table,
     )
 
     print(f"\nConfiguration:")
@@ -61,6 +64,9 @@ def cmd_run(args):
         print(f"    {SCORER_PRESETS[args.preset]['description']}")
     print(f"  Tracking: {config.tracking_uri}")
     print(f"  Experiment: {config.experiment_name}")
+    print(f"  Data Source: {config.data_source}")
+    if config.uc_table_name:
+        print(f"  UC Table: {config.uc_table_name}")
 
     # Show model for LLM presets
     requires_llm = args.preset in ("full", "tier3", "all")
@@ -95,6 +101,8 @@ def cmd_run(args):
         check_gates=not args.no_gates,
         save_baseline=args.save_baseline,
         compare_baseline=args.compare_baseline,
+        data_source=args.data_source,
+        uc_table_name=args.uc_table,
     )
 
     # Return exit code based on quality gates
@@ -218,6 +226,60 @@ from mlflow.entities import Feedback
     return 0
 
 
+def cmd_sync(args):
+    """Sync ground truth examples to Unity Catalog dataset."""
+    from benchmarks.skills.mlflow_evaluation.dataset import DatasetSource
+
+    print(f"\n{'='*60}")
+    print(f"Dataset Sync: {args.skill}")
+    print(f"{'='*60}")
+
+    if args.skill != "mlflow-evaluation":
+        print(f"Error: Unknown skill '{args.skill}'")
+        print("Available skills: mlflow-evaluation")
+        return 1
+
+    if args.to_uc:
+        # Sync YAML to Unity Catalog
+        uc_table = args.uc_table
+        if not uc_table:
+            import os
+            uc_table = os.environ.get("BENCHMARK_UC_TABLE")
+
+        if not uc_table:
+            print("Error: UC table name required.")
+            print("  Set BENCHMARK_UC_TABLE environment variable or use --uc-table")
+            return 1
+
+        print(f"\nSyncing YAML → UC dataset: {uc_table}")
+
+        try:
+            count = DatasetSource.sync_yaml_to_uc(
+                uc_table_name=uc_table,
+                dry_run=args.dry_run
+            )
+            if args.dry_run:
+                print(f"\n[DRY RUN] Would sync {count} records")
+            else:
+                print(f"\n✓ Successfully synced {count} records to UC")
+            return 0
+        except Exception as e:
+            print(f"\n✗ Sync failed: {e}")
+            return 1
+
+    elif args.info:
+        # Show dataset info
+        info = DatasetSource.get_dataset_info()
+        print("\nDataset Info:")
+        for key, value in info.items():
+            print(f"  {key}: {value}")
+        return 0
+
+    else:
+        print("Error: Specify --to-uc to sync YAML to UC, or --info to show dataset info")
+        return 1
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="CLI for skill benchmark evaluations",
@@ -275,6 +337,17 @@ def main():
         action="store_true",
         help="Compare results to existing baseline"
     )
+    run_parser.add_argument(
+        "--data-source",
+        default="auto",
+        choices=["auto", "yaml", "uc"],
+        help="Dataset source: auto (detect), yaml (local), uc (Unity Catalog)"
+    )
+    run_parser.add_argument(
+        "--uc-table",
+        default=None,
+        help="Unity Catalog table name (default: from BENCHMARK_UC_TABLE env)"
+    )
     run_parser.set_defaults(func=cmd_run)
 
     # Regression command
@@ -305,6 +378,35 @@ def main():
         help="Skill name to initialize"
     )
     init_parser.set_defaults(func=cmd_init)
+
+    # Sync command
+    sync_parser = subparsers.add_parser("sync", help="Sync dataset between YAML and Unity Catalog")
+    sync_parser.add_argument(
+        "--skill", "-s",
+        required=True,
+        help="Skill name"
+    )
+    sync_parser.add_argument(
+        "--to-uc",
+        action="store_true",
+        help="Sync YAML examples to Unity Catalog dataset"
+    )
+    sync_parser.add_argument(
+        "--info",
+        action="store_true",
+        help="Show dataset info"
+    )
+    sync_parser.add_argument(
+        "--uc-table",
+        default=None,
+        help="Unity Catalog table name (default: from BENCHMARK_UC_TABLE env)"
+    )
+    sync_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be synced without making changes"
+    )
+    sync_parser.set_defaults(func=cmd_sync)
 
     args = parser.parse_args()
 

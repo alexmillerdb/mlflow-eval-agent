@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "timestamp": "2026-01-15T14:19:34.047125",
+  "run_id": "c8032fa9904045e4acdcf5d574202d1b",
+  "metrics": {
+    "code_syntax_valid/mean": 0.8333333333333334,
+    "uses_genai_evaluate/mean": 1.0,
+    "has_nested_inputs/mean": 1.0,
+    "code_block_count/mean": 2.0833333333333335,
+    "code_block_count/min": 2.0,
+    "code_block_count/max": 3.0,
+    "returns_valid_feedback/mean": 1.0,
+    "has_scorer_decorator/mean": 0.8333333333333334,
+    "predict_fn_unpacks_kwargs/mean": 1.0,
+    "guidelines_has_name/mean": 1.0,
+    "trace_search_uses_attributes/mean": 1.0,
+    "uses_valid_aggregations/mean": 1.0
+  },
+  "scorer_preset": "tier1",
+  "num_examples": 12
+}
