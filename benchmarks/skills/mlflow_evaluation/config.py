@@ -59,6 +59,14 @@ class BenchmarkConfig:
     max_examples: Optional[int] = None  # None = use all examples
     tags: dict = field(default_factory=dict)  # Additional tags to log
 
+    # Dataset source settings
+    data_source: str = "yaml"  # "yaml", "uc", "auto"
+    uc_table_name: Optional[str] = None  # UC table for MLflow-managed dataset
+    dataset_tags: dict = field(default_factory=lambda: {
+        "skill": "mlflow-evaluation",
+        "version": "1.0",
+    })
+
     def __post_init__(self):
         # Set tracking URI from environment or default to local SQLite
         if self.tracking_uri is None:
@@ -81,6 +89,10 @@ class BenchmarkConfig:
                 "BENCHMARK_JUDGE_MODEL",
                 "databricks:/databricks-gpt-5-2"
             )
+
+        # Set UC table name from environment if not provided
+        if self.uc_table_name is None:
+            self.uc_table_name = os.environ.get("BENCHMARK_UC_TABLE")
 
         # Set default quality gates if none provided
         if not self.quality_gates:
@@ -157,6 +169,8 @@ def get_config(
     version: str = "1.0.0",
     max_examples: Optional[int] = None,
     judge_model: Optional[str] = None,
+    data_source: str = "yaml",
+    uc_table_name: Optional[str] = None,
 ) -> BenchmarkConfig:
     """
     Get benchmark configuration with optional overrides.
@@ -166,6 +180,9 @@ def get_config(
         version: Version string for the skill being evaluated
         max_examples: Limit number of examples (None = all)
         judge_model: LLM model for Tier 2/3 scorers (None = use env or default)
+        data_source: Dataset source ("yaml", "uc", "auto")
+                     "yaml" recommended for benchmarks with pre-computed outputs
+        uc_table_name: Unity Catalog table name (None = use env)
 
     Returns:
         BenchmarkConfig instance
@@ -175,11 +192,14 @@ def get_config(
         scorer_preset=scorer_preset,
         max_examples=max_examples,
         judge_model=judge_model,
+        data_source=data_source,
+        uc_table_name=uc_table_name,
         tags={
             "skill.name": "mlflow-evaluation",
             "skill.version": version,
             "evaluation.type": "benchmark",
             "scorer.preset": scorer_preset,
+            "data.source": data_source,
         }
     )
 
