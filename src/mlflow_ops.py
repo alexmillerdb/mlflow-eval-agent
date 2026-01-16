@@ -6,6 +6,7 @@ Following KISS principle from production-grade agentic AI research.
 
 import json
 import logging
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
@@ -17,6 +18,92 @@ logger = logging.getLogger(__name__)
 
 # Single truncation limit (vs 4 modes previously)
 MAX_OUTPUT_CHARS = 3000
+
+# Maximum retry attempts for a single task before marking as failed
+MAX_TASK_ATTEMPTS = 5
+
+
+# =============================================================================
+# CONTEXT MONITORING
+# =============================================================================
+
+@dataclass
+class ContextMetrics:
+    """Tracks context growth within a session for optimization analysis.
+
+    Estimates context size based on tool calls and message patterns.
+    """
+
+    session_id: str
+    tool_calls: int = 0
+    estimated_messages: int = 2  # Initial user + system
+    estimated_context_kb: float = 0.0
+
+    def record_tool_call(self, tool_name: str, input_size: int, output_size: int) -> None:
+        """Record a tool call and update context estimates.
+
+        Each tool call adds ~2 messages (request + response) to context.
+        """
+        self.tool_calls += 1
+        self.estimated_messages += 2
+
+        # Estimate context growth (input + output in KB)
+        self.estimated_context_kb += (input_size + output_size) / 1024
+
+        logger.debug(
+            f"Context: {self.tool_calls} tools, "
+            f"~{self.estimated_messages} msgs, "
+            f"~{self.estimated_context_kb:.1f}KB"
+        )
+
+    def to_dict(self) -> dict:
+        """Convert metrics to dictionary for logging/saving."""
+        return {
+            "session_id": self.session_id,
+            "tool_calls": self.tool_calls,
+            "estimated_messages": self.estimated_messages,
+            "estimated_context_kb": round(self.estimated_context_kb, 2),
+        }
+
+
+# Global context metrics for current session
+_context_metrics: Optional[ContextMetrics] = None
+
+
+def start_context_monitoring(session_id: str, initial_prompt: str) -> ContextMetrics:
+    """Initialize context monitoring for a new session.
+
+    Args:
+        session_id: Session identifier
+        initial_prompt: The initial prompt (used to estimate starting size)
+
+    Returns:
+        The initialized ContextMetrics instance
+    """
+    global _context_metrics
+    _context_metrics = ContextMetrics(session_id=session_id)
+    _context_metrics.estimated_context_kb = len(initial_prompt) / 1024
+    return _context_metrics
+
+
+def get_context_metrics() -> Optional[ContextMetrics]:
+    """Get current session's context metrics."""
+    return _context_metrics
+
+
+def record_tool_call(tool_name: str, input_size: int, output_size: int) -> None:
+    """Record a tool call to the current session's metrics.
+
+    Safe to call even if monitoring not started (no-op).
+    """
+    if _context_metrics:
+        _context_metrics.record_tool_call(tool_name, input_size, output_size)
+
+
+def _reset_context_metrics() -> None:
+    """Reset context metrics (for testing)."""
+    global _context_metrics
+    _context_metrics = None
 
 # =============================================================================
 # SESSION DIRECTORY MANAGEMENT
@@ -357,6 +444,92 @@ def all_tasks_complete() -> bool:
         tasks = data
 
     return len(tasks) > 0 and all(t.get("status") == "completed" for t in tasks)
+
+
+def get_task_attempts(task_id: int) -> int:
+    """Get the number of attempts for a task.
+
+    Args:
+        task_id: The task ID to check
+
+    Returns:
+        Number of attempts (0 if not found or no attempts field)
+    """
+    tasks_file = get_tasks_file()
+    if not tasks_file.exists():
+        return 0
+
+    data = json.loads(tasks_file.read_text())
+
+    # Handle both formats: list or dict with "tasks" key
+    if isinstance(data, dict):
+        tasks = data.get("tasks", [])
+    else:
+        tasks = data
+
+    for task in tasks:
+        if task.get("id") == task_id:
+            return task.get("attempts", 0)
+
+    return 0
+
+
+def increment_task_attempts(task_id: int) -> bool:
+    """Increment the attempt counter for a task.
+
+    Args:
+        task_id: The task ID to increment
+
+    Returns:
+        True if task can continue (under limit), False if exceeded max attempts
+    """
+    tasks_file = get_tasks_file()
+    if not tasks_file.exists():
+        return False
+
+    data = json.loads(tasks_file.read_text())
+
+    # Handle both formats: list or dict with "tasks" key
+    is_dict_format = isinstance(data, dict)
+    if is_dict_format:
+        tasks = data.get("tasks", [])
+    else:
+        tasks = data
+
+    # Find and update the task
+    task_found = False
+    for task in tasks:
+        if task.get("id") == task_id:
+            task_found = True
+            current_attempts = task.get("attempts", 0)
+            new_attempts = current_attempts + 1
+            task["attempts"] = new_attempts
+
+            # Check if exceeded limit
+            if new_attempts > MAX_TASK_ATTEMPTS:
+                task["status"] = "failed"
+                task["failure_reason"] = f"Exceeded max attempts ({MAX_TASK_ATTEMPTS})"
+                logger.warning(f"Task {task_id} failed: exceeded max attempts ({MAX_TASK_ATTEMPTS})")
+
+                # Save and return False
+                if is_dict_format:
+                    tasks_file.write_text(json.dumps(data, indent=2))
+                else:
+                    tasks_file.write_text(json.dumps(tasks, indent=2))
+                return False
+
+            break
+
+    if not task_found:
+        return False
+
+    # Save updated tasks
+    if is_dict_format:
+        tasks_file.write_text(json.dumps(data, indent=2))
+    else:
+        tasks_file.write_text(json.dumps(tasks, indent=2))
+
+    return True
 
 
 def print_progress_summary() -> None:

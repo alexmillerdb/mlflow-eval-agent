@@ -12,6 +12,7 @@ import mlflow
 from claude_agent_sdk import tool
 
 from . import mlflow_ops
+from .mlflow_ops import record_tool_call
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,9 @@ def create_tools() -> list:
                     filter_string=args.get("filter_string"),
                     max_results=args.get("max_results", 100)
                 )
-                return mlflow_ops.text_result(mlflow_ops.format_traces_table(traces))
+                result = mlflow_ops.text_result(mlflow_ops.format_traces_table(traces))
+                record_tool_call("mlflow_query", len(str(args)), len(str(result)))
+                return result
 
             elif operation == "get":
                 trace_id = args.get("trace_id", "")
@@ -68,7 +71,9 @@ def create_tools() -> list:
                     return mlflow_ops.text_result("[MLflow] Error: trace_id required for get")
 
                 trace = mlflow_ops.get_trace(trace_id)
-                return mlflow_ops.text_result(json.dumps(trace, indent=2, default=str))
+                result = mlflow_ops.text_result(json.dumps(trace, indent=2, default=str))
+                record_tool_call("mlflow_query", len(str(args)), len(str(result)))
+                return result
 
             elif operation == "assessment":
                 trace_id = args.get("trace_id", "")
@@ -79,8 +84,12 @@ def create_tools() -> list:
                 trace = mlflow_ops.get_trace(trace_id)
                 for a in trace.get("assessments", []):
                     if a["name"] == assessment_name:
-                        return mlflow_ops.text_result(json.dumps(a, indent=2))
-                return mlflow_ops.text_result(f"[MLflow] Assessment '{assessment_name}' not found")
+                        result = mlflow_ops.text_result(json.dumps(a, indent=2))
+                        record_tool_call("mlflow_query", len(str(args)), len(str(result)))
+                        return result
+                result = mlflow_ops.text_result(f"[MLflow] Assessment '{assessment_name}' not found")
+                record_tool_call("mlflow_query", len(str(args)), len(str(result)))
+                return result
 
             else:
                 return mlflow_ops.text_result(
@@ -128,7 +137,9 @@ def create_tools() -> list:
                 if not key:
                     return mlflow_ops.text_result("[MLflow] Error: key required for tag")
                 mlflow_ops.set_tag(trace_id, key, value)
-                return mlflow_ops.text_result(f"[MLflow] Tag '{key}={value}' set on {trace_id}")
+                result = mlflow_ops.text_result(f"[MLflow] Tag '{key}={value}' set on {trace_id}")
+                record_tool_call("mlflow_annotate", len(str(args)), len(str(result)))
+                return result
 
             elif operation == "feedback":
                 name = args.get("name", "")
@@ -141,7 +152,9 @@ def create_tools() -> list:
                     value=value,
                     rationale=args.get("rationale")
                 )
-                return mlflow_ops.text_result(f"[MLflow] Feedback '{name}' logged to {trace_id}")
+                result = mlflow_ops.text_result(f"[MLflow] Feedback '{name}' logged to {trace_id}")
+                record_tool_call("mlflow_annotate", len(str(args)), len(str(result)))
+                return result
 
             elif operation == "expectation":
                 name = args.get("name", "")
@@ -149,7 +162,9 @@ def create_tools() -> list:
                 if not name:
                     return mlflow_ops.text_result("[MLflow] Error: name required for expectation")
                 mlflow_ops.log_expectation(trace_id=trace_id, name=name, value=value)
-                return mlflow_ops.text_result(f"[MLflow] Expectation '{name}' logged to {trace_id}")
+                result = mlflow_ops.text_result(f"[MLflow] Expectation '{name}' logged to {trace_id}")
+                record_tool_call("mlflow_annotate", len(str(args)), len(str(result)))
+                return result
 
             else:
                 return mlflow_ops.text_result(
@@ -186,7 +201,9 @@ def create_tools() -> list:
                 return mlflow_ops.text_result("[State] Error: data required")
 
             path = mlflow_ops.save_state(key, data)
-            return mlflow_ops.text_result(f"[State] Saved to {path}")
+            result = mlflow_ops.text_result(f"[State] Saved to {path}")
+            record_tool_call("save_findings", len(str(args)), len(str(result)))
+            return result
 
         except Exception as e:
             logger.exception("Error saving findings")

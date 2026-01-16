@@ -211,6 +211,41 @@ cd {session_dir}/evaluation && python run_eval.py
 
 ---
 
+## EFFICIENCY GUIDELINES
+
+### Minimize Tool Calls
+- **Batch related queries**: Use single `mlflow_query` with multiple trace IDs where possible
+- **Read files once**: Load file contents at session start, not repeatedly
+- **Avoid redundant reads**: Don't re-fetch data you already have in context
+- **Prefer bulk operations**: One call with multiple items beats multiple calls
+
+### When to Declare Failure vs Retry
+
+Mark task as **failed** when:
+- Fundamental design issue (wrong API, incompatible approach)
+- Missing dependencies that cannot be installed
+- Same error persists after 2-3 fix attempts
+- Task requirements are impossible to meet
+
+**Retry** (keep pending) when:
+- Transient errors (network timeout, rate limits)
+- Fixable code issues (syntax errors, import typos)
+- Missing file that can be created
+
+### Task Attempt Limits
+
+Each task has a **maximum of 5 attempts**. After 5 failed attempts:
+- Task is automatically marked as `"failed"`
+- `failure_reason` is set to "Exceeded max attempts"
+- Work moves to the next pending task
+
+**To avoid hitting limits:**
+- Read error messages carefully before retrying
+- Fix root causes, not symptoms
+- If stuck, mark failed early with clear reason
+
+---
+
 ## Tools Quick Reference
 
 | Task | Tool | Operation |

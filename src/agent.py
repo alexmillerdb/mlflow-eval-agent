@@ -76,6 +76,17 @@ from .tools import create_tools, MCPTools, BuiltinTools
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# Re-export context monitoring from mlflow_ops (avoid circular imports)
+from .mlflow_ops import (
+    ContextMetrics,
+    start_context_monitoring,
+    get_context_metrics,
+    record_tool_call,
+    _reset_context_metrics,
+)
+
+
 # =============================================================================
 # PROMPT LOADING
 # =============================================================================
@@ -266,6 +277,19 @@ class MLflowAgent:
                     self._last_session_id = message.session_id
                     duration_ms = int((time.time() - start_time) * 1000)
 
+                    # Set token tracking attributes on the current span
+                    span = mlflow.get_current_active_span()
+                    if span and message.usage:
+                        usage = message.usage
+                        span.set_attribute("input_tokens", usage.get("input_tokens", 0))
+                        span.set_attribute("output_tokens", usage.get("output_tokens", 0))
+                        span.set_attribute("cache_creation_input_tokens", usage.get("cache_creation_input_tokens", 0))
+                        span.set_attribute("cache_read_input_tokens", usage.get("cache_read_input_tokens", 0))
+                        span.set_attribute("total_tokens",
+                            usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
+                    if span and message.total_cost_usd:
+                        span.set_attribute("cost_usd", message.total_cost_usd)
+
                     yield AgentResult(
                         success=not message.is_error,
                         response=response_text,
@@ -380,6 +404,16 @@ async def run_autonomous(
                     if result.cost_usd:
                         logger.info(f"[Cost: ${result.cost_usd:.4f}]")
                         iter_span.set_attribute("cost_usd", result.cost_usd)
+
+                    # Propagate token tracking to session span
+                    if result.usage_data:
+                        usage = result.usage_data
+                        iter_span.set_attribute("input_tokens", usage.get("input_tokens", 0))
+                        iter_span.set_attribute("output_tokens", usage.get("output_tokens", 0))
+                        iter_span.set_attribute("cache_creation_input_tokens", usage.get("cache_creation_input_tokens", 0))
+                        iter_span.set_attribute("cache_read_input_tokens", usage.get("cache_read_input_tokens", 0))
+                        iter_span.set_attribute("total_tokens",
+                            usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
 
             except KeyboardInterrupt:
                 iter_span.set_attribute("status", "interrupted")
