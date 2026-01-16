@@ -1,52 +1,50 @@
 ---
-description: Run agent tests with optional test file argument
-allowed-tools: [Bash]
-argument-hint: "[test-file-name]"
-model: claude-haiku-4-5-20251001
+description: Run agent test and capture trace ID for analysis
+argument-hint: "[prompt]"
+model: claude-sonnet-4-5-20250929
 ---
 
-Run agent tests and analyze results.
+Run a quick agent test and capture the trace ID.
 
-**Test file**: $ARGUMENTS (default: project-specific test file)
-
-## Configuration
-
-This command expects a test file in your project. Configure the default test file path by:
-1. Providing the path as an argument: `/test-agent path/to/test.py`
-2. Or setting up a standard location like `tests/test_agent.py`
+**Prompt**: $ARGUMENTS (default: "Say hello in 5 words")
 
 ## Instructions
 
-1. **Determine test file**:
-   - If argument provided: run the specified test file
-   - If no argument: look for common test file patterns:
-     - `tests/test_agent.py`
-     - `test_agent.py`
-     - `pytest tests/`
+1. Run the test using the simplified MLflowAgent:
 
-2. **Execute test**:
-   ```bash
-   # Run from project root
-   python [test-file]
-   # Or use pytest
-   pytest [test-file] -v
-   ```
+```bash
+uv run python -c "
+import asyncio
+import mlflow
+from src.agent import MLflowAgent, setup_mlflow
 
-3. **Extract key information**:
-   - Test pass/fail status
-   - Any error messages or stack traces
-   - Trace IDs (look for "Trace ID:" in output)
-   - Any warnings or recommendations
+setup_mlflow()
 
-4. **Report results**:
-   Provide a concise summary:
-   - Status: PASS or FAIL
-   - Trace IDs found (if any)
-   - Key observations
-   - Recommended next steps:
-     - If PASS: "Use `/analyze-trace [trace-id]` to analyze trace"
-     - If FAIL: Describe the issue and suggest fixes
+async def test():
+    agent = MLflowAgent()
+    prompt = '''$ARGUMENTS''' if '''$ARGUMENTS'''.strip() else 'Say hello in 5 words'
 
-5. **Follow-up actions** (do NOT execute automatically):
-   - If tests passed, suggest running trace analysis
-   - If tests failed, offer to fix the issue if user wants
+    async for result in agent.query(prompt):
+        if result.event_type == 'result':
+            print(f'Response: {result.response}')
+            print(f'Cost: \${result.cost_usd:.4f}' if result.cost_usd else '')
+            if result.usage_data:
+                usage = result.usage_data
+                print(f'Tokens - Input: {usage.get(\"input_tokens\", 0)}, Output: {usage.get(\"output_tokens\", 0)}, Cache Read: {usage.get(\"cache_read_input_tokens\", 0)}')
+
+    trace_id = mlflow.get_last_active_trace_id()
+    print(f'\\nTrace ID: {trace_id}')
+    return trace_id
+
+asyncio.run(test())
+"
+```
+
+2. Extract and report:
+   - Response preview
+   - Cost and token usage
+   - **Trace ID** (critical for follow-up analysis)
+
+3. Suggest next step:
+   - "Use `/analyze-tokens <trace-id>` to analyze token usage in detail"
+   - "Use `/analyze-trace <trace-id>` for latency and bottleneck analysis"
