@@ -9,6 +9,7 @@ dependencies = [
     "mlflow[databricks]>=3.5.1",
     "python-dotenv>=1.0.0",
     "databricks-connect",
+    "databricks-sdk",
     "anthropic",
     "nest-asyncio>=1.6.0",
 ]

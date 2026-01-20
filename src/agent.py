@@ -41,6 +41,10 @@ def setup_mlflow():
     if _mlflow_initialized:
         return
 
+    # Configure Databricks env vars for subprocess auth (single entry point)
+    from .databricks_auth import configure_env
+    configure_env()
+
     import mlflow as _mlflow  # Local import to avoid scoping issues
     import mlflow.anthropic as mlflow_anthropic
 
