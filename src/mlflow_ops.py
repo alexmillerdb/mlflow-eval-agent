@@ -17,10 +17,14 @@ from mlflow.client import MlflowClient
 logger = logging.getLogger(__name__)
 
 # Single truncation limit (vs 4 modes previously)
-MAX_OUTPUT_CHARS = 3000
+MAX_OUTPUT_CHARS = 1500
 
 # Maximum retry attempts for a single task before marking as failed
 MAX_TASK_ATTEMPTS = 5
+
+# Context thresholds for warnings
+CONTEXT_WARNING_KB = 40
+CONTEXT_CRITICAL_KB = 80
 
 
 # =============================================================================
@@ -98,6 +102,18 @@ def record_tool_call(tool_name: str, input_size: int, output_size: int) -> None:
     """
     if _context_metrics:
         _context_metrics.record_tool_call(tool_name, input_size, output_size)
+
+        # Warn when context grows large
+        if _context_metrics.estimated_context_kb > CONTEXT_CRITICAL_KB:
+            logger.warning(
+                f"CONTEXT CRITICAL: {_context_metrics.estimated_context_kb:.1f}KB "
+                f"exceeds {CONTEXT_CRITICAL_KB}KB threshold"
+            )
+        elif _context_metrics.estimated_context_kb > CONTEXT_WARNING_KB:
+            logger.info(
+                f"CONTEXT WARNING: {_context_metrics.estimated_context_kb:.1f}KB "
+                f"approaching limit"
+            )
 
 
 def _reset_context_metrics() -> None:
@@ -182,9 +198,14 @@ def get_evaluation_dir() -> Path:
 def get_client() -> MlflowClient:
     """Get authenticated MLflow client.
 
-    Authentication via Databricks SDK (config profile or env vars).
+    Respects MLFLOW_TRACKING_URI for local vs Databricks backend.
+    - Local MLflow: http://localhost:5000
+    - Databricks (local dev): databricks (requires config profile or host/token)
+    - Databricks (in cluster): databricks (automatic auth)
     """
-    mlflow.set_tracking_uri("databricks")
+    import os
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "databricks")
+    mlflow.set_tracking_uri(tracking_uri)
     return MlflowClient()
 
 
@@ -227,17 +248,103 @@ def search_traces(
     } for t in traces]
 
 
-def get_trace(trace_id: str) -> dict:
-    """Get detailed trace with spans.
+def search_runs(
+    experiment_id: str,
+    filter_string: Optional[str] = None,
+    max_results: int = 100,
+) -> list[dict]:
+    """Search MLflow Runs (evaluations, training runs, etc).
+
+    Args:
+        experiment_id: MLflow experiment ID (numeric string)
+        filter_string: Filter for runs. Valid filter columns include:
+            - attributes.run_name: Filter by run name
+            - attributes.status: Filter by run status (RUNNING, FINISHED, FAILED, etc.)
+            - metrics.<key>: Filter by metric value (e.g., "metrics.accuracy > 0.9")
+            - params.<key>: Filter by parameter value
+            - tags.<key>: Filter by tag value
+        max_results: Maximum runs to return (default 100)
+
+    Returns:
+        List of run summary dicts with run_id, run_name, status, metrics, etc.
+
+    Example filters:
+        - "attributes.run_name = 'my_eval_20250120'"
+        - "attributes.status = 'FINISHED'"
+        - "metrics.safety > 0.8"
+        - "tags.mlflow.runName LIKE '%eval%'"
+    """
+    client = get_client()
+    runs = client.search_runs(
+        experiment_ids=[experiment_id],
+        filter_string=filter_string,
+        max_results=max_results,
+        order_by=["start_time DESC"],
+    )
+
+    return [{
+        "run_id": run.info.run_id,
+        "run_name": run.info.run_name,
+        "status": run.info.status,
+        "start_time": run.info.start_time,
+        "end_time": run.info.end_time,
+        "metrics": dict(run.data.metrics) if run.data.metrics else {},
+        "params": dict(run.data.params) if run.data.params else {},
+        "artifact_uri": run.info.artifact_uri,
+    } for run in runs]
+
+
+def get_run(run_id: str) -> dict:
+    """Get a specific MLflow Run by ID.
+
+    Args:
+        run_id: The MLflow run ID
+
+    Returns:
+        Dict with run details including metrics, params, and tags
+    """
+    client = get_client()
+    run = client.get_run(run_id)
+
+    return {
+        "run_id": run.info.run_id,
+        "run_name": run.info.run_name,
+        "status": run.info.status,
+        "start_time": run.info.start_time,
+        "end_time": run.info.end_time,
+        "metrics": dict(run.data.metrics) if run.data.metrics else {},
+        "params": dict(run.data.params) if run.data.params else {},
+        "tags": dict(run.data.tags) if run.data.tags else {},
+        "artifact_uri": run.info.artifact_uri,
+    }
+
+
+@lru_cache(maxsize=5)
+def _get_trace_cached(trace_id: str):
+    """Cache raw trace to avoid re-fetching within a session."""
+    client = get_client()
+    return client.get_trace(trace_id=trace_id)
+
+
+def clear_trace_cache():
+    """Clear trace cache between sessions."""
+    _get_trace_cached.cache_clear()
+
+
+def get_trace(trace_id: str, detail_level: str = "summary") -> dict:
+    """Get trace with appropriate detail level.
 
     Args:
         trace_id: The trace ID to fetch
+        detail_level: "summary" (~2KB), "analysis" (~10KB), or "full" (~50KB)
+            - summary: info + span names/types/durations only
+            - analysis: + bottlenecks, errors, token stats
+            - full: + all inputs/outputs (current behavior)
 
     Returns:
-        Dict with trace info, assessments, and spans
+        Dict with trace data at requested detail level
     """
-    client = get_client()
-    trace = client.get_trace(trace_id=trace_id)
+    trace = _get_trace_cached(trace_id)
 
     info = {
         "trace_id": trace.info.trace_id,
@@ -245,26 +352,98 @@ def get_trace(trace_id: str) -> dict:
         "execution_time_ms": trace.info.execution_time_ms,
     }
 
-    # Assessments
-    assessments = []
-    if hasattr(trace.info, 'assessments') and trace.info.assessments:
-        for a in trace.info.assessments:
-            source_type = None
-            if hasattr(a, 'source') and a.source:
-                source_type = str(a.source.source_type) if hasattr(a.source, 'source_type') else None
-            assessments.append({
-                "name": a.name,
-                "value": a.value,
-                "source_type": source_type,
-                "rationale": a.rationale,
+    if detail_level == "summary":
+        # Minimal data: just structure and timing (~2KB)
+        spans = []
+        for span in trace.data.spans:
+            duration_ms = 0.0
+            if span.end_time_ns and span.start_time_ns:
+                duration_ms = (span.end_time_ns - span.start_time_ns) / 1e6
+            spans.append({
+                "name": span.name,
+                "span_type": str(span.span_type) if span.span_type else "UNKNOWN",
+                "duration_ms": round(duration_ms, 2),
             })
+        return {"info": info, "spans": spans}
 
-    # Spans with simple truncation
-    spans = []
-    for span in trace.data.spans:
-        spans.append(_format_span(span))
+    elif detail_level == "analysis":
+        # Add bottlenecks, errors, token data (~10KB)
+        spans = []
+        total_tokens = {"input": 0, "output": 0}
+        errors = []
+        bottlenecks = []
 
-    return {"info": info, "assessments": assessments, "spans": spans}
+        for span in trace.data.spans:
+            duration_ms = 0.0
+            if span.end_time_ns and span.start_time_ns:
+                duration_ms = (span.end_time_ns - span.start_time_ns) / 1e6
+
+            span_type_str = str(span.span_type) if span.span_type else "UNKNOWN"
+            attrs = span.attributes or {}
+
+            span_data = {
+                "name": span.name,
+                "span_type": span_type_str,
+                "duration_ms": round(duration_ms, 2),
+            }
+
+            # Token usage for LLM spans
+            if "LLM" in span_type_str or "CHAT_MODEL" in span_type_str:
+                input_tokens = attrs.get("mlflow.chat_model.input_tokens", 0) or 0
+                output_tokens = attrs.get("mlflow.chat_model.output_tokens", 0) or 0
+                total_tokens["input"] += input_tokens
+                total_tokens["output"] += output_tokens
+                span_data["tokens"] = {"input": input_tokens, "output": output_tokens}
+                span_data["model"] = attrs.get("mlflow.chat_model.model") or attrs.get("llm.model_name")
+
+            # Error info
+            if span.status and hasattr(span.status, 'status_code'):
+                if "ERROR" in str(span.status.status_code):
+                    error_info = {"span": span.name, "error": span.status.description or "Unknown error"}
+                    span_data["error"] = error_info["error"]
+                    errors.append(error_info)
+
+            # Track bottlenecks (spans > 1 second)
+            if duration_ms > 1000:
+                bottlenecks.append({"span": span.name, "duration_ms": round(duration_ms, 2)})
+
+            spans.append(span_data)
+
+        # Sort bottlenecks by duration
+        bottlenecks.sort(key=lambda x: x["duration_ms"], reverse=True)
+
+        return {
+            "info": info,
+            "analysis": {
+                "total_tokens": total_tokens,
+                "error_count": len(errors),
+                "errors": errors[:5],  # Top 5 errors
+                "bottlenecks": bottlenecks[:5],  # Top 5 slow spans
+            },
+            "spans": spans,
+        }
+
+    else:  # "full" - current behavior
+        # Assessments
+        assessments = []
+        if hasattr(trace.info, 'assessments') and trace.info.assessments:
+            for a in trace.info.assessments:
+                source_type = None
+                if hasattr(a, 'source') and a.source:
+                    source_type = str(a.source.source_type) if hasattr(a.source, 'source_type') else None
+                assessments.append({
+                    "name": a.name,
+                    "value": a.value,
+                    "source_type": source_type,
+                    "rationale": a.rationale,
+                })
+
+        # Spans with full data
+        spans = []
+        for span in trace.data.spans:
+            spans.append(_format_span(span))
+
+        return {"info": info, "assessments": assessments, "spans": spans}
 
 
 def _format_span(span) -> dict:
@@ -615,6 +794,39 @@ def format_traces_table(traces: list[dict]) -> str:
 
     if len(traces) > 50:
         lines.append(f"\n... and {len(traces) - 50} more traces")
+
+    return "\n".join(lines)
+
+
+def format_runs_table(runs: list[dict]) -> str:
+    """Format MLflow runs as markdown table."""
+    if not runs:
+        return "No runs found."
+
+    lines = [
+        "| Run ID | Run Name | Status | Metrics |",
+        "|--------|----------|--------|---------|"
+    ]
+    for run in runs[:50]:
+        run_id_short = run['run_id'][:8] + "..."
+        run_name = run.get('run_name') or 'N/A'
+        # Truncate run name if too long
+        if len(run_name) > 30:
+            run_name = run_name[:27] + "..."
+        status = run.get('status', 'UNKNOWN')
+        metrics = run.get('metrics', {})
+        # Show first few metrics or count
+        if metrics:
+            metric_summary = ", ".join(f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}"
+                                       for k, v in list(metrics.items())[:3])
+            if len(metrics) > 3:
+                metric_summary += f" (+{len(metrics)-3} more)"
+        else:
+            metric_summary = "none"
+        lines.append(f"| {run_id_short} | {run_name} | {status} | {metric_summary} |")
+
+    if len(runs) > 50:
+        lines.append(f"\n... and {len(runs) - 50} more runs")
 
     return "\n".join(lines)
 

@@ -146,6 +146,12 @@ predict_fn signature: `def predict_fn(**inputs)` - receives unpacked kwargs, NOT
 - [ ] Use `mlflow.genai.evaluate()` (NOT `mlflow.evaluate()`)
 - [ ] Check if dataset has `outputs` → skip predict_fn
 - [ ] If using predict_fn, signature is `**inputs` (unpacked kwargs)
+- [ ] **CRITICAL**: Include MLflow setup in this exact order:
+  ```python
+  mlflow.set_tracking_uri("databricks")
+  mlflow.set_experiment(experiment_id="{experiment_id}")
+  ```
+  This MUST come before any `mlflow.start_run()` or `mlflow.genai.evaluate()` calls.
 
 ---
 
@@ -190,6 +196,17 @@ cd {session_dir}/evaluation && python run_eval.py
 1. Save results to `{session_dir}/state/validation_results.json`
 2. Mark validate task as completed
 
+#### Step 4: Verify MLflow Run (Optional)
+
+If you need to verify the evaluation run was logged correctly:
+
+```json
+{"operation": "search_runs", "experiment_id": "...", "filter_string": "attributes.run_name = 'your_eval_run'"}
+{"operation": "get_run", "run_id": "..."}
+```
+
+This lets you confirm metrics were recorded in MLflow.
+
 ---
 
 ### Task Type: fix
@@ -212,6 +229,47 @@ cd {session_dir}/evaluation && python run_eval.py
 ---
 
 ## EFFICIENCY GUIDELINES
+
+### Session Efficiency Limits
+
+#### Tool Call Budget
+- Target: **5-8 tool calls** per task
+- Maximum: **12 tool calls** before declaring blocked
+- If you exceed 10 tool calls, STOP and assess:
+  - Is the task actually completeable?
+  - Are you repeating the same operations?
+  - Should this task be marked as failed?
+
+#### Context Budget
+- **DO NOT** re-read files you've already read in this session
+- **DO NOT** call mlflow_query multiple times for the same trace
+- **DO** batch operations where possible
+- **DO** extract only what you need from tool results
+
+#### When to Complete
+Mark task as **completed** as soon as the core requirement is met.
+DO NOT continue "improving" or "polishing" after the task is done.
+
+### Trace Data Access Patterns
+
+The `mlflow_query get` operation supports `detail_level` to control response size:
+
+| Level | Size | When to Use |
+|-------|------|-------------|
+| `summary` | ~2KB | Initial exploration, counting spans, checking structure |
+| `analysis` | ~10KB | Identifying bottlenecks, errors, token usage |
+| `full` | ~50KB | Need actual span inputs/outputs |
+
+**Best practices:**
+- **Start with `summary`** - use this for initial trace exploration
+- **Use `analysis`** when debugging performance or errors
+- **Only use `full`** when you need actual span inputs/outputs
+- **Never fetch the same trace twice** - data is cached within your session
+
+Example:
+```json
+{"operation": "get", "trace_id": "tr-xxx", "detail_level": "summary"}
+```
 
 ### Minimize Tool Calls
 - **Batch related queries**: Use single `mlflow_query` with multiple trace IDs where possible
@@ -251,7 +309,9 @@ Each task has a **maximum of 5 attempts**. After 5 failed attempts:
 | Task | Tool | Operation |
 |------|------|-----------|
 | Find traces | `mlflow_query` | `search` |
+| Find eval runs | `mlflow_query` | `search_runs` |
 | Get trace details | `mlflow_query` | `get` |
+| Get run details | `mlflow_query` | `get_run` |
 | Get assessment | `mlflow_query` | `assessment` |
 | Tag trace | `mlflow_annotate` | `tag` |
 | Log feedback | `mlflow_annotate` | `feedback` |

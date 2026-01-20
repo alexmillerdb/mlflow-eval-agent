@@ -27,26 +27,32 @@ def create_tools() -> list:
     @mlflow.trace(name="tool_mlflow_query", span_type="TOOL")
     @tool(
         "mlflow_query",
-        "Query MLflow traces. Operations: 'search' (find traces), 'get' (trace details), 'assessment' (get feedback/expectation).",
+        "Query MLflow data. Operations: 'search' (find traces), 'get' (trace details), 'assessment' (get feedback), 'search_runs' (find eval/training runs), 'get_run' (run details). Use detail_level for trace 'get'.",
         {
             "operation": str,
             "experiment_id": str,
             "trace_id": str,
+            "run_id": str,
             "filter_string": str,
             "max_results": int,
             "assessment_name": str,
+            "detail_level": str,
         }
     )
     async def mlflow_query_tool(args: dict[str, Any]) -> dict[str, Any]:
-        """Query MLflow for trace data.
+        """Query MLflow for trace and run data.
 
         Args:
-            operation: "search", "get", or "assessment"
-            experiment_id: Required for search
-            trace_id: Required for get/assessment
-            filter_string: Optional filter for search (e.g., "status = 'ERROR'")
-            max_results: Max traces for search (default 100)
+            operation: "search", "get", "assessment", "search_runs", or "get_run"
+            experiment_id: Required for search/search_runs
+            trace_id: Required for get/assessment (trace operations)
+            run_id: Required for get_run (run operations)
+            filter_string: Optional filter for search/search_runs
+                - For traces: "status = 'OK'", "name", "timestamp_ms", etc.
+                - For runs: "attributes.run_name = '...'", "metrics.x > 0.9", etc.
+            max_results: Max results for search operations (default 100)
             assessment_name: Required for assessment operation
+            detail_level: For trace 'get' - "summary", "analysis", or "full"
         """
         try:
             operation = args.get("operation", "").lower()
@@ -65,13 +71,38 @@ def create_tools() -> list:
                 record_tool_call("mlflow_query", len(str(args)), len(str(result)))
                 return result
 
+            elif operation == "search_runs":
+                experiment_id = args.get("experiment_id", "")
+                if not experiment_id:
+                    return mlflow_ops.text_result("[MLflow] Error: experiment_id required for search_runs")
+
+                runs = mlflow_ops.search_runs(
+                    experiment_id=experiment_id,
+                    filter_string=args.get("filter_string"),
+                    max_results=args.get("max_results", 100)
+                )
+                result = mlflow_ops.text_result(mlflow_ops.format_runs_table(runs))
+                record_tool_call("mlflow_query", len(str(args)), len(str(result)))
+                return result
+
             elif operation == "get":
                 trace_id = args.get("trace_id", "")
                 if not trace_id:
                     return mlflow_ops.text_result("[MLflow] Error: trace_id required for get")
 
-                trace = mlflow_ops.get_trace(trace_id)
+                detail_level = args.get("detail_level", "summary")
+                trace = mlflow_ops.get_trace(trace_id, detail_level=detail_level)
                 result = mlflow_ops.text_result(json.dumps(trace, indent=2, default=str))
+                record_tool_call("mlflow_query", len(str(args)), len(str(result)))
+                return result
+
+            elif operation == "get_run":
+                run_id = args.get("run_id", "")
+                if not run_id:
+                    return mlflow_ops.text_result("[MLflow] Error: run_id required for get_run")
+
+                run = mlflow_ops.get_run(run_id)
+                result = mlflow_ops.text_result(json.dumps(run, indent=2, default=str))
                 record_tool_call("mlflow_query", len(str(args)), len(str(result)))
                 return result
 
@@ -93,7 +124,7 @@ def create_tools() -> list:
 
             else:
                 return mlflow_ops.text_result(
-                    f"[MLflow] Unknown operation '{operation}'. Use 'search', 'get', or 'assessment'."
+                    f"[MLflow] Unknown operation '{operation}'. Use 'search', 'get', 'assessment', 'search_runs', or 'get_run'."
                 )
 
         except Exception as e:
@@ -199,6 +230,13 @@ def create_tools() -> list:
                 return mlflow_ops.text_result("[State] Error: key required")
             if data is None:
                 return mlflow_ops.text_result("[State] Error: data required")
+
+            # Handle case where data is passed as JSON string
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    pass  # Keep as string if not valid JSON
 
             path = mlflow_ops.save_state(key, data)
             result = mlflow_ops.text_result(f"[State] Saved to {path}")

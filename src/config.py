@@ -32,7 +32,7 @@ class Config:
     working_dir: Path = field(default_factory=Path.cwd)
 
     # Limits
-    max_turns: int = 50
+    max_turns: int = 30
 
     # Session (auto-generated if not provided)
     session_id: str = ""

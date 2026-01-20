@@ -383,8 +383,11 @@ async def run_autonomous(
             prompt = prompt.replace("{experiment_id}", experiment_id)
             prompt = prompt.replace("{session_dir}", str(session_dir))
 
-            # After first run, switch to worker mode
-            is_first_run = False
+            # Start context monitoring for this session
+            context_metrics = start_context_monitoring(
+                session_id=f"{config.session_id}_iter{iteration}",
+                initial_prompt=prompt
+            )
 
             logger.info(f"--- Session {iteration} ({prompt_name}) ---")
 
@@ -415,6 +418,17 @@ async def run_autonomous(
                         iter_span.set_attribute("total_tokens",
                             usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
 
+                # Log context metrics to span
+                if context_metrics:
+                    iter_span.set_attribute("context_tool_calls", context_metrics.tool_calls)
+                    iter_span.set_attribute("context_estimated_messages", context_metrics.estimated_messages)
+                    iter_span.set_attribute("context_estimated_kb", context_metrics.estimated_context_kb)
+                    logger.info(
+                        f"[Context] {context_metrics.tool_calls} tool calls, "
+                        f"~{context_metrics.estimated_messages} messages, "
+                        f"~{context_metrics.estimated_context_kb:.1f}KB"
+                    )
+
             except KeyboardInterrupt:
                 iter_span.set_attribute("status", "interrupted")
                 logger.info("Interrupted by user.")
@@ -423,6 +437,15 @@ async def run_autonomous(
                 iter_span.set_attribute("error", str(e))
                 logger.error(f"Error in session: {e}")
                 logger.exception("Session error")
+
+            # After session completes, transition from initializer to worker
+            if is_first_run:
+                tasks_file = get_tasks_file()
+                if tasks_file.exists():
+                    is_first_run = False
+                    logger.info("✓ Initializer session complete. Switching to worker mode.")
+                else:
+                    logger.warning("⚠ Initializer did not create task file. Will retry initializer session.")
 
         # Progress summary
         print_progress_summary()
