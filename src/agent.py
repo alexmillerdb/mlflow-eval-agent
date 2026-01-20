@@ -41,6 +41,10 @@ def setup_mlflow():
     if _mlflow_initialized:
         return
 
+    # Configure Databricks env vars for subprocess auth (single entry point)
+    from .databricks_auth import configure_env
+    configure_env()
+
     import mlflow as _mlflow  # Local import to avoid scoping issues
     import mlflow.anthropic as mlflow_anthropic
 
@@ -75,6 +79,17 @@ from .tools import create_tools, MCPTools, BuiltinTools
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# Re-export context monitoring from mlflow_ops (avoid circular imports)
+from .mlflow_ops import (
+    ContextMetrics,
+    start_context_monitoring,
+    get_context_metrics,
+    record_tool_call,
+    _reset_context_metrics,
+)
+
 
 # =============================================================================
 # PROMPT LOADING
@@ -266,6 +281,19 @@ class MLflowAgent:
                     self._last_session_id = message.session_id
                     duration_ms = int((time.time() - start_time) * 1000)
 
+                    # Set token tracking attributes on the current span
+                    span = mlflow.get_current_active_span()
+                    if span and message.usage:
+                        usage = message.usage
+                        span.set_attribute("input_tokens", usage.get("input_tokens", 0))
+                        span.set_attribute("output_tokens", usage.get("output_tokens", 0))
+                        span.set_attribute("cache_creation_input_tokens", usage.get("cache_creation_input_tokens", 0))
+                        span.set_attribute("cache_read_input_tokens", usage.get("cache_read_input_tokens", 0))
+                        span.set_attribute("total_tokens",
+                            usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
+                    if span and message.total_cost_usd:
+                        span.set_attribute("cost_usd", message.total_cost_usd)
+
                     yield AgentResult(
                         success=not message.is_error,
                         response=response_text,
@@ -359,8 +387,11 @@ async def run_autonomous(
             prompt = prompt.replace("{experiment_id}", experiment_id)
             prompt = prompt.replace("{session_dir}", str(session_dir))
 
-            # After first run, switch to worker mode
-            is_first_run = False
+            # Start context monitoring for this session
+            context_metrics = start_context_monitoring(
+                session_id=f"{config.session_id}_iter{iteration}",
+                initial_prompt=prompt
+            )
 
             logger.info(f"--- Session {iteration} ({prompt_name}) ---")
 
@@ -381,6 +412,27 @@ async def run_autonomous(
                         logger.info(f"[Cost: ${result.cost_usd:.4f}]")
                         iter_span.set_attribute("cost_usd", result.cost_usd)
 
+                    # Propagate token tracking to session span
+                    if result.usage_data:
+                        usage = result.usage_data
+                        iter_span.set_attribute("input_tokens", usage.get("input_tokens", 0))
+                        iter_span.set_attribute("output_tokens", usage.get("output_tokens", 0))
+                        iter_span.set_attribute("cache_creation_input_tokens", usage.get("cache_creation_input_tokens", 0))
+                        iter_span.set_attribute("cache_read_input_tokens", usage.get("cache_read_input_tokens", 0))
+                        iter_span.set_attribute("total_tokens",
+                            usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
+
+                # Log context metrics to span
+                if context_metrics:
+                    iter_span.set_attribute("context_tool_calls", context_metrics.tool_calls)
+                    iter_span.set_attribute("context_estimated_messages", context_metrics.estimated_messages)
+                    iter_span.set_attribute("context_estimated_kb", context_metrics.estimated_context_kb)
+                    logger.info(
+                        f"[Context] {context_metrics.tool_calls} tool calls, "
+                        f"~{context_metrics.estimated_messages} messages, "
+                        f"~{context_metrics.estimated_context_kb:.1f}KB"
+                    )
+
             except KeyboardInterrupt:
                 iter_span.set_attribute("status", "interrupted")
                 logger.info("Interrupted by user.")
@@ -389,6 +441,15 @@ async def run_autonomous(
                 iter_span.set_attribute("error", str(e))
                 logger.error(f"Error in session: {e}")
                 logger.exception("Session error")
+
+            # After session completes, transition from initializer to worker
+            if is_first_run:
+                tasks_file = get_tasks_file()
+                if tasks_file.exists():
+                    is_first_run = False
+                    logger.info("✓ Initializer session complete. Switching to worker mode.")
+                else:
+                    logger.warning("⚠ Initializer did not create task file. Will retry initializer session.")
 
         # Progress summary
         print_progress_summary()

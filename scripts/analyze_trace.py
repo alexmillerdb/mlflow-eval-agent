@@ -5,6 +5,7 @@ Usage:
     python scripts/analyze_trace.py <trace-id>
     python scripts/analyze_trace.py <trace-id> --full    # Include full span data
     python scripts/analyze_trace.py <trace-id> --raw     # Raw trace JSON only
+    python scripts/analyze_trace.py <trace-id> --tokens  # Token usage analysis
 
 Environment variables (loaded from .env):
     DATABRICKS_HOST: Databricks workspace URL
@@ -28,6 +29,11 @@ With --full flag, also includes:
 
 With --raw flag:
 - Outputs raw trace data for direct analysis
+
+With --tokens flag:
+- Token usage breakdown by session
+- Cache efficiency metrics
+- Cost aggregation
 """
 
 import json
@@ -467,6 +473,92 @@ def extract_raw_trace(trace: Trace) -> dict:
     }
 
 
+def analyze_token_usage(trace: Trace) -> dict[str, Any]:
+    """Extract token tracking attributes from session/agent spans.
+
+    Analyzes custom token attributes set by the agent:
+    - input_tokens, output_tokens
+    - cache_read_input_tokens, cache_creation_input_tokens
+    - cost_usd, iteration, phase
+
+    Returns structured data for token analysis reports.
+    """
+    spans = trace.data.spans if hasattr(trace, "data") else []
+
+    sessions = []
+    totals = {"input": 0, "output": 0, "cache_read": 0, "cache_create": 0, "cost": 0.0}
+
+    for span in spans:
+        # Look for session spans or agent_query spans with token attributes
+        if not (span.name.startswith("session_") or span.name == "agent_query"):
+            continue
+
+        attrs = span.attributes or {}
+
+        # Extract our custom token attributes (not mlflow.* prefixed ones)
+        token_data = {
+            "span_name": span.name,
+            "input_tokens": attrs.get("input_tokens", 0),
+            "output_tokens": attrs.get("output_tokens", 0),
+            "cache_read_input_tokens": attrs.get("cache_read_input_tokens", 0),
+            "cache_creation_input_tokens": attrs.get("cache_creation_input_tokens", 0),
+            "total_tokens": attrs.get("total_tokens", 0),
+            "cost_usd": attrs.get("cost_usd", 0),
+            "iteration": attrs.get("iteration"),
+            "phase": attrs.get("phase"),
+        }
+
+        # Only include session spans to avoid duplicating agent_query data
+        if span.name.startswith("session_"):
+            sessions.append(token_data)
+            totals["input"] += token_data["input_tokens"] or 0
+            totals["output"] += token_data["output_tokens"] or 0
+            totals["cache_read"] += token_data["cache_read_input_tokens"] or 0
+            totals["cache_create"] += token_data["cache_creation_input_tokens"] or 0
+            totals["cost"] += token_data["cost_usd"] or 0
+
+    # If no session spans found, try agent_query span
+    if not sessions:
+        for span in spans:
+            if span.name == "agent_query":
+                attrs = span.attributes or {}
+                token_data = {
+                    "span_name": span.name,
+                    "input_tokens": attrs.get("input_tokens", 0),
+                    "output_tokens": attrs.get("output_tokens", 0),
+                    "cache_read_input_tokens": attrs.get("cache_read_input_tokens", 0),
+                    "cache_creation_input_tokens": attrs.get("cache_creation_input_tokens", 0),
+                    "total_tokens": attrs.get("total_tokens", 0),
+                    "cost_usd": attrs.get("cost_usd", 0),
+                    "iteration": attrs.get("iteration"),
+                    "phase": attrs.get("phase"),
+                }
+                sessions.append(token_data)
+                totals["input"] += token_data["input_tokens"] or 0
+                totals["output"] += token_data["output_tokens"] or 0
+                totals["cache_read"] += token_data["cache_read_input_tokens"] or 0
+                totals["cache_create"] += token_data["cache_creation_input_tokens"] or 0
+                totals["cost"] += token_data["cost_usd"] or 0
+
+    # Calculate cache efficiency
+    total_input_context = totals["input"] + totals["cache_read"] + totals["cache_create"]
+    cache_efficiency = totals["cache_read"] / total_input_context if total_input_context > 0 else 0
+
+    return {
+        "trace_id": trace.info.trace_id,
+        "sessions": sessions,
+        "totals": {
+            "input_tokens": totals["input"],
+            "output_tokens": totals["output"],
+            "cache_read_input_tokens": totals["cache_read"],
+            "cache_creation_input_tokens": totals["cache_create"],
+            "total_cost_usd": round(totals["cost"], 6),
+        },
+        "cache_efficiency": round(cache_efficiency, 4),
+        "session_count": len(sessions),
+    }
+
+
 def generate_recommendations(bottlenecks: list, errors: dict, llm_analysis: dict, total_ms: float) -> list[str]:
     """Generate actionable recommendations from analysis."""
     recommendations = []
@@ -562,9 +654,10 @@ def generate_report(trace: Trace, include_full: bool = False) -> dict[str, Any]:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python analyze_trace.py <trace-id> [--full | --raw]", file=sys.stderr)
-        print("  --full: Include full span data with inputs/outputs", file=sys.stderr)
-        print("  --raw:  Output raw trace JSON only", file=sys.stderr)
+        print("Usage: python analyze_trace.py <trace-id> [--full | --raw | --tokens]", file=sys.stderr)
+        print("  --full:   Include full span data with inputs/outputs", file=sys.stderr)
+        print("  --raw:    Output raw trace JSON only", file=sys.stderr)
+        print("  --tokens: Token usage analysis with cache efficiency", file=sys.stderr)
         sys.exit(1)
 
     # Parse arguments
@@ -572,12 +665,15 @@ def main():
     trace_id = None
     include_full = False
     raw_mode = False
+    tokens_mode = False
 
     for arg in args:
         if arg == "--full":
             include_full = True
         elif arg == "--raw":
             raw_mode = True
+        elif arg == "--tokens":
+            tokens_mode = True
         elif not arg.startswith("-"):
             trace_id = arg.strip()
 
@@ -591,7 +687,10 @@ def main():
 
         trace = get_trace(trace_id)
 
-        if raw_mode:
+        if tokens_mode:
+            # Output token usage analysis
+            report = analyze_token_usage(trace)
+        elif raw_mode:
             # Output raw trace data
             report = extract_raw_trace(trace)
         else:

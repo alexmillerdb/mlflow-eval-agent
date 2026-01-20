@@ -163,7 +163,9 @@ Before ending this session, verify you have created:
 | Tool | Operation | Purpose | Required Args |
 |------|-----------|---------|---------------|
 | `mlflow_query` | `search` | Find traces in experiment | `experiment_id` |
+| `mlflow_query` | `search_runs` | Find evaluation runs (lightweight) | `experiment_id` |
 | `mlflow_query` | `get` | Get detailed trace with spans | `trace_id` |
+| `mlflow_query` | `get_run` | Get run metrics/params (no trace data) | `run_id` |
 | `mlflow_query` | `assessment` | Get specific assessment | `trace_id`, `assessment_name` |
 | `mlflow_annotate` | `tag` | Set tag on trace | `trace_id`, `key`, `value` |
 | `mlflow_annotate` | `feedback` | Log feedback assessment | `trace_id`, `name`, `value` |
