@@ -4,6 +4,25 @@ Working patterns for running evaluations, comparing results, and iterating on qu
 
 ---
 
+## CRITICAL: MLflow Setup for All Scripts
+
+Every evaluation script MUST include this setup before any evaluation calls:
+
+```python
+import mlflow
+
+# Required setup (in this exact order)
+mlflow.set_tracking_uri("databricks")
+mlflow.set_experiment(experiment_id="YOUR_EXPERIMENT_ID")
+```
+
+Without `set_tracking_uri("databricks")`, scripts will fail in Databricks Serverless with:
+```
+mlflow.exceptions.MlflowException: Reading Databricks credential configuration failed...
+```
+
+---
+
 ## Pattern 0: Local Agent Testing First (CRITICAL)
 
 **Always test agents locally by importing them directly, NOT via model serving endpoints.**

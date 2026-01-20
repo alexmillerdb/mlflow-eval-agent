@@ -530,10 +530,44 @@ def my_scorer(outputs) -> float:
 
 ---
 
+## ❌ WRONG Missing MLflow Tracking URI Setup
+
+### WRONG: Missing tracking URI
+```python
+# ❌ WRONG - Will fail in Databricks Serverless
+import mlflow
+
+mlflow.set_experiment(experiment_id="123")  # Missing tracking URI!
+
+with mlflow.start_run():
+    results = mlflow.genai.evaluate(...)
+# Error: Reading Databricks credential configuration failed
+```
+
+### ✅ CORRECT: Set tracking URI first
+```python
+# ✅ CORRECT - tracking URI MUST come first
+import mlflow
+
+mlflow.set_tracking_uri("databricks")  # REQUIRED - must be first!
+mlflow.set_experiment(experiment_id="123")
+
+with mlflow.start_run():
+    results = mlflow.genai.evaluate(...)
+```
+
+**Why?**
+- `set_tracking_uri("databricks")` tells MLflow how to authenticate
+- Without it, scripts fail in Databricks Serverless with credential errors
+- Order matters: tracking URI MUST come before experiment/run calls
+
+---
+
 ## Summary Checklist
 
 Before running evaluation, verify:
 
+- [ ] **MLflow setup**: `set_tracking_uri("databricks")` before `set_experiment()`
 - [ ] Using `mlflow.genai.evaluate()` (not `mlflow.evaluate()`)
 - [ ] Data has `inputs` key (nested structure)
 - [ ] `predict_fn` accepts **unpacked kwargs (not dict)
