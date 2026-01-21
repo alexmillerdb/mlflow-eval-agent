@@ -271,3 +271,4 @@ class BuiltinTools:
     GLOB = "Glob"
     GREP = "Grep"
     SKILL = "Skill"
+    TASK = "Task"

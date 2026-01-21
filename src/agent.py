@@ -64,6 +64,7 @@ def setup_mlflow():
 # =============================================================================
 
 from claude_agent_sdk import (
+    AgentDefinition,
     ClaudeSDKClient,
     ClaudeAgentOptions,
     AssistantMessage,
@@ -199,6 +200,9 @@ class MLflowAgent:
             tools=tools,
         )
 
+        # Load trace-analyzer prompt for sub-agent
+        trace_analyzer_prompt = load_prompt("trace-analyzer")
+
         return ClaudeAgentOptions(
             system_prompt=self._build_system_prompt(),
             mcp_servers={"mlflow-eval": mcp_server},
@@ -210,11 +214,22 @@ class MLflowAgent:
                 BuiltinTools.GLOB,
                 BuiltinTools.GREP,
                 BuiltinTools.SKILL,
+                BuiltinTools.TASK,  # Required for subagent invocation
                 # Our 3 simplified tools
                 MCPTools.MLFLOW_QUERY,
                 MCPTools.MLFLOW_ANNOTATE,
                 MCPTools.SAVE_FINDINGS,
             ],
+            agents={
+                "trace-analyzer": AgentDefinition(
+                    description="Analyzes MLflow traces in batches and returns structured JSON summaries. Use when you need to analyze multiple traces without filling your context.",
+                    prompt=trace_analyzer_prompt,
+                    tools=[
+                        MCPTools.MLFLOW_QUERY,  # Only needs query access
+                    ],
+                    model=self.config.model,
+                ),
+            },
             setting_sources=["project"],
             cwd=str(self.config.working_dir),
             permission_mode="bypassPermissions",
