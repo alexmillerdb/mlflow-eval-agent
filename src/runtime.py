@@ -18,6 +18,7 @@ class RuntimeContext(Enum):
     """Runtime execution context."""
     LOCAL = "local"
     DATABRICKS_JOB = "databricks_job"
+    DATABRICKS_APP = "databricks_app"
 
 
 @dataclass
@@ -31,7 +32,7 @@ class RuntimeInfo:
     @property
     def is_databricks(self) -> bool:
         """Check if running in Databricks."""
-        return self.context == RuntimeContext.DATABRICKS_JOB
+        return self.context in (RuntimeContext.DATABRICKS_JOB, RuntimeContext.DATABRICKS_APP)
 
     @property
     def session_prefix(self) -> str:
@@ -51,6 +52,7 @@ def detect_runtime() -> RuntimeInfo:
     - DB_IS_JOB: Set to 'TRUE' by Databricks in job context
     - DB_JOB_ID / DATABRICKS_JOB_ID: Job identifier
     - DB_JOB_RUN_ID / DATABRICKS_JOB_RUN_ID: Run identifier
+    - DATABRICKS_APP_NAME: Set by Databricks Apps runtime
     - MLFLOW_AGENT_VOLUME_PATH: Unity Catalog Volume for storage
 
     Returns:
@@ -58,6 +60,23 @@ def detect_runtime() -> RuntimeInfo:
     """
     # Check for explicit volume path (implies Databricks intent)
     volume_path = os.getenv("MLFLOW_AGENT_VOLUME_PATH")
+
+    # Check for Databricks App context
+    # Apps set specific environment variables and run with OAuth context
+    is_app = (
+        os.getenv("DATABRICKS_APP_NAME") is not None or
+        os.getenv("DATABRICKS_APP_PORT") is not None or
+        # Apps running Streamlit may have specific markers
+        (os.getenv("STREAMLIT_SERVER_PORT") is not None and
+         Path("/databricks").exists())
+    )
+
+    if is_app:
+        logger.info("Detected Databricks App context")
+        return RuntimeInfo(
+            context=RuntimeContext.DATABRICKS_APP,
+            volume_path=volume_path,
+        )
 
     # Check Databricks job context - multiple detection methods
     # python_wheel_task in serverless may not set DB_IS_JOB

@@ -101,6 +101,33 @@ resources:
               - "--mlflow-agent-experiment-id"
               - "${var.mlflow_agent_experiment_id}"
 
+  # ---------------------------------------------------------------------------
+  # Streamlit App - Web UI deployment
+  # ---------------------------------------------------------------------------
+  apps:
+    mlflow_eval_app:
+      name: "[${bundle.target}] MLflow Eval Agent"
+      description: "Web UI for MLflow Evaluation Agent with streaming output"
+      source_code_path: ./app
+      config:
+        command:
+          - streamlit
+          - run
+          - main.py
+          - "--server.port=8501"
+          - "--server.headless=true"
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: databricks
+          - name: MLFLOW_EXPERIMENT_ID
+            value: "${var.experiment_id}"
+          - name: MLFLOW_AGENT_VOLUME_PATH
+            value: "${var.volume_path}"
+          - name: MODEL
+            value: "${var.model}"
+          - name: ANTHROPIC_BASE_URL
+            value: "${var.anthropic_endpoint}"
+
     # -------------------------------------------------------------------------
     # Notebook Job - Interactive/Widget-based deployment
     # -------------------------------------------------------------------------

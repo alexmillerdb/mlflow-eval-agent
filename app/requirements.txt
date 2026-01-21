@@ -1,0 +1,20 @@
+# MLflow Eval Agent Streamlit App Dependencies
+#
+# Note: When deployed as a Databricks App, some dependencies are pre-installed.
+# This file lists the minimal required packages.
+
+# Streamlit framework
+streamlit>=1.31.0
+
+# MLflow for tracking and experiment management
+mlflow>=2.10.0
+
+# The mlflow_eval_agent package (installed from wheel)
+# This provides: src.agent, src.mlflow_ops, src.config, etc.
+# Install with: pip install ../dist/*.whl
+
+# Note: The following are included in the main wheel and should not be
+# duplicated here:
+# - anthropic
+# - claude-agent-sdk
+# - python-dotenv
