@@ -47,6 +47,11 @@ from app.services import (
     AgentRunner,
     poll_events,
 )
+from app.services.state_reader import (
+    get_task_status,
+    get_analysis_summary,
+    list_generated_files,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -181,37 +186,253 @@ def _handle_control_requests(config: dict, user):
 def _poll_agent_events():
     """Poll for agent events and update UI.
 
-    Note: Interactive mode handles its own polling in _stream_interactive_response()
-    to avoid st.rerun() flickering during streaming.
+    Note: Both interactive and autonomous modes handle their own polling loops
+    with st.empty() placeholders to avoid st.rerun() flickering during streaming.
+    This function is now a no-op - kept for potential future use.
     """
-    if not st.session_state.get("running"):
-        return
+    # Both modes handle their own polling loops with placeholders
+    # Interactive: _stream_interactive_response()
+    # Autonomous: _stream_autonomous_response()
+    return
 
-    # Interactive mode handles its own polling loop with placeholders
-    # This avoids st.rerun() flickering during streaming
-    if st.session_state.get("mode") == "interactive":
-        return
 
-    queue = st.session_state.get("queue")
-    if not queue:
-        return
+def _update_output_placeholders(
+    cost_ph,
+    input_ph,
+    output_ph,
+    tools_ph,
+    status_ph,
+    text_ph,
+    tool_calls_container,
+    thinking_container,
+):
+    """Update Output tab placeholders from session state.
 
-    # Poll for events (50ms timeout for responsive streaming)
-    events = poll_events(queue, timeout=0.05)
+    Args:
+        cost_ph: Placeholder for cost metric.
+        input_ph: Placeholder for input tokens metric.
+        output_ph: Placeholder for output tokens metric.
+        tools_ph: Placeholder for tool calls metric.
+        status_ph: Placeholder for status indicator.
+        text_ph: Placeholder for text output.
+        tool_calls_container: Container for tool calls.
+        thinking_container: Container for thinking blocks.
+    """
+    import json
 
-    for event in events:
-        process_stream_event(event)
+    # Update metrics
+    cost_ph.metric("Cost", f"${st.session_state.get('total_cost', 0):.4f}")
+    input_ph.metric("Input Tokens", f"{st.session_state.get('total_input_tokens', 0):,}")
+    output_ph.metric("Output Tokens", f"{st.session_state.get('total_output_tokens', 0):,}")
+    tools_ph.metric("Tool Calls", len(st.session_state.get("tool_calls", [])))
 
-        # Check for completion
-        if event.event_type == "status":
-            status = event.data.get("status")
-            if status in ("stopped", "completed", "max_iterations"):
-                st.session_state["running"] = False
-
-    # Auto-rerun while running to continue polling (autonomous mode only)
+    # Update status
     if st.session_state.get("running"):
-        time.sleep(0.05)  # Reduced from 0.5s for more responsive streaming
-        st.rerun()
+        phase = st.session_state.get("current_phase", "")
+        iteration = st.session_state.get("current_iteration", 0)
+        if phase and iteration:
+            status_ph.markdown(f":hourglass_flowing_sand: **{phase.title()} (iteration {iteration})...**")
+        else:
+            status_ph.markdown(":hourglass_flowing_sand: **Agent is running...**")
+    else:
+        status_ph.empty()
+
+    # Update text output
+    text = st.session_state.get("accumulated_text", "")
+    if text:
+        text_ph.markdown(text)
+    else:
+        text_ph.info("No output yet. Agent is starting...")
+
+    # Update tool calls
+    tool_calls = st.session_state.get("tool_calls", [])
+    if tool_calls:
+        with tool_calls_container.container():
+            with st.expander(f"Tool Calls ({len(tool_calls)})", expanded=False):
+                for i, tc in enumerate(tool_calls):
+                    st.markdown(f"**{i+1}. {tc.get('tool_name', 'Unknown')}**")
+                    if tc.get("tool_input"):
+                        st.code(json.dumps(tc["tool_input"], indent=2), language="json")
+                    if tc.get("tool_result"):
+                        st.text(tc["tool_result"][:500])
+                    st.divider()
+
+    # Update thinking blocks
+    thinking_blocks = st.session_state.get("thinking_blocks", [])
+    if thinking_blocks:
+        with thinking_container.container():
+            with st.expander(f"Thinking ({len(thinking_blocks)})", expanded=False):
+                for i, tb in enumerate(thinking_blocks):
+                    st.markdown(f"**Thought {i+1}:**")
+                    st.text(tb[:1000])
+                    st.divider()
+
+
+def _update_progress_placeholder(progress_ph, session_path: Path):
+    """Update Progress tab by re-reading task files.
+
+    Args:
+        progress_ph: Placeholder for progress content.
+        session_path: Path to session directory.
+    """
+    if not session_path:
+        progress_ph.info("No active session.")
+        return
+
+    task_status = get_task_status(session_path)
+    analysis = get_analysis_summary(session_path)
+
+    with progress_ph.container():
+        # Progress bar
+        if task_status.total > 0:
+            progress = task_status.completed / task_status.total
+            st.progress(progress, text=f"{task_status.completed}/{task_status.total} tasks completed")
+
+            # Task list
+            for task in task_status.tasks:
+                status = task.get("status", "pending")
+                name = task.get("name", "Unknown task")
+
+                status_badges = {
+                    "completed": ":white_check_mark:",
+                    "pending": ":hourglass_flowing_sand:",
+                    "failed": ":x:",
+                    "in_progress": ":arrow_forward:",
+                }
+                badge = status_badges.get(status, ":question:")
+                st.markdown(f"{badge} {name}")
+        else:
+            st.info("Waiting for initializer to create task plan...")
+
+        # Analysis summary
+        if analysis:
+            st.markdown("---")
+            st.markdown(f"**Traces analyzed:** {analysis.trace_count}")
+            if analysis.key_findings:
+                st.markdown("**Key findings:**")
+                for finding in analysis.key_findings[:3]:
+                    st.markdown(f"- {finding}")
+
+
+def _update_code_placeholder(code_ph, session_path: Path):
+    """Update Generated Code tab by re-reading files.
+
+    Args:
+        code_ph: Placeholder for code content.
+        session_path: Path to session directory.
+    """
+    if not session_path:
+        code_ph.info("No active session.")
+        return
+
+    files = list_generated_files(session_path)
+
+    with code_ph.container():
+        if not files:
+            st.info("No generated files yet. The agent will create evaluation files during task execution.")
+            return
+
+        # Expected files checklist
+        expected = {"eval_dataset.py", "scorers.py", "run_eval.py"}
+        found = {f["name"] for f in files}
+
+        for name in expected:
+            if name in found:
+                st.markdown(f":white_check_mark: `{name}`")
+            else:
+                st.markdown(f":hourglass_flowing_sand: `{name}` (pending)")
+
+        # Extra files
+        extra = found - expected
+        for name in extra:
+            st.markdown(f":page_facing_up: `{name}`")
+
+
+def _stream_autonomous_response():
+    """Stream autonomous mode using placeholders (no st.rerun during streaming).
+
+    Uses a polling loop with st.empty() placeholders for smooth streaming
+    without st.rerun() during execution. Only calls st.rerun() once at the end.
+    """
+    queue = st.session_state.get("queue")
+    session_dir = st.session_state.get("session_dir")
+    session_path = Path(session_dir) if session_dir else None
+
+    # Create tabs with placeholders
+    tab1, tab2, tab3 = st.tabs(["Output", "Progress", "Generated Code"])
+
+    with tab1:
+        # Metrics placeholders
+        cols = st.columns(4)
+        cost_ph = cols[0].empty()
+        input_ph = cols[1].empty()
+        output_ph = cols[2].empty()
+        tools_ph = cols[3].empty()
+
+        # Status placeholder
+        status_ph = st.empty()
+
+        # Output area
+        st.markdown("### Output")
+        text_ph = st.empty()
+        tool_calls_container = st.empty()
+        thinking_container = st.empty()
+
+    with tab2:
+        st.markdown("### Task Progress")
+        progress_ph = st.empty()
+
+    with tab3:
+        st.markdown("### Generated Evaluation Code")
+        code_ph = st.empty()
+
+    # Initial render of all placeholders
+    _update_output_placeholders(
+        cost_ph, input_ph, output_ph, tools_ph,
+        status_ph, text_ph, tool_calls_container, thinking_container
+    )
+    _update_progress_placeholder(progress_ph, session_path)
+    _update_code_placeholder(code_ph, session_path)
+
+    # Polling loop - NO st.rerun() here
+    last_file_check = time.time()
+    while st.session_state.get("running"):
+        events = poll_events(queue, timeout=0.05)
+
+        for event in events:
+            process_stream_event(event)
+
+            # Check for completion
+            if event.event_type == "status":
+                status = event.data.get("status")
+                if status in ("stopped", "completed", "max_iterations"):
+                    st.session_state["running"] = False
+
+        # Update Output placeholders on every iteration (fast)
+        _update_output_placeholders(
+            cost_ph, input_ph, output_ph, tools_ph,
+            status_ph, text_ph, tool_calls_container, thinking_container
+        )
+
+        # Update Progress and Code tabs every 2 seconds (file reads are slower)
+        current_time = time.time()
+        if current_time - last_file_check > 2.0:
+            _update_progress_placeholder(progress_ph, session_path)
+            _update_code_placeholder(code_ph, session_path)
+            last_file_check = current_time
+
+        time.sleep(0.02)  # Small sleep to prevent CPU spin
+
+    # Final update before rerun
+    _update_output_placeholders(
+        cost_ph, input_ph, output_ph, tools_ph,
+        status_ph, text_ph, tool_calls_container, thinking_container
+    )
+    _update_progress_placeholder(progress_ph, session_path)
+    _update_code_placeholder(code_ph, session_path)
+
+    # Final rerun for clean completed state
+    st.rerun()
 
 
 def _render_main_content(config: dict):
@@ -232,7 +453,17 @@ def _render_main_content(config: dict):
 
 
 def _render_autonomous_mode():
-    """Render autonomous mode UI with tabs."""
+    """Render autonomous mode UI with tabs.
+
+    Uses placeholder-based streaming when running to avoid st.rerun() flickering.
+    Falls back to static rendering when not running.
+    """
+    # If running, use streaming function with placeholders (no flicker)
+    if st.session_state.get("running"):
+        _stream_autonomous_response()
+        return  # Streaming function handles everything, including final rerun
+
+    # Static rendering when NOT running
     tab1, tab2, tab3 = st.tabs(["Output", "Progress", "Generated Code"])
 
     with tab1:

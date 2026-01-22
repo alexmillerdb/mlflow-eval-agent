@@ -218,6 +218,10 @@ class AgentRunner:
         config.experiment_id = self.experiment_id
         config.model = self.model
 
+        # Set working_dir to project root so skills at .claude/skills/ can be found
+        project_root = Path(__file__).parent.parent.parent
+        config.working_dir = project_root
+
         # Check if first run
         is_first_run = not get_tasks_file().exists()
 
@@ -291,6 +295,10 @@ class AgentRunner:
         config = Config.from_env()
         config.experiment_id = self.experiment_id
         config.model = self.model
+
+        # Set working_dir to project root so skills at .claude/skills/ can be found
+        project_root = Path(__file__).parent.parent.parent
+        config.working_dir = project_root
 
         agent = MLflowAgent(config)
 
