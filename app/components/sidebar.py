@@ -16,6 +16,7 @@ import streamlit as st
 
 from ..auth import UserIdentity
 from ..services.session_manager import list_user_sessions, SessionInfo
+from .output_stream import clear_output
 
 
 def render_sidebar(user: UserIdentity) -> dict:
@@ -112,13 +113,12 @@ def render_sidebar(user: UserIdentity) -> dict:
 
     # New session button
     if st.sidebar.button("New Session", use_container_width=True):
-        # Clear current session
+        # Clear session identifiers
         st.session_state.pop("session_id", None)
         st.session_state.pop("session_dir", None)
-        st.session_state.pop("accumulated_text", None)
-        st.session_state.pop("tool_calls", None)
-        st.session_state.pop("thinking_blocks", None)
-        st.session_state.pop("total_cost", None)
+        st.session_state.pop("agent_session_id", None)
+        # Clear all output state including iteration history
+        clear_output(preserve_history=False)
         st.rerun()
 
     # Past sessions

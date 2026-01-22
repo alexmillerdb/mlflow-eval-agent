@@ -432,8 +432,19 @@ def _stream_autonomous_response():
             status_ph, text_ph, tool_calls_container, thinking_container
         )
 
-        # Update Progress and Code tabs every 2 seconds (file reads are slower)
+        # Check for immediate refresh triggers (file writes detected)
         current_time = time.time()
+        if st.session_state.get("task_refresh_ready"):
+            _update_progress_placeholder(progress_ph, session_path)
+            st.session_state["task_refresh_ready"] = False
+            last_file_check = current_time
+
+        if st.session_state.get("code_refresh_ready"):
+            _update_code_placeholder(code_ph, session_path)
+            st.session_state["code_refresh_ready"] = False
+            last_file_check = current_time
+
+        # Fallback: Update Progress and Code tabs every 2 seconds (file reads are slower)
         if current_time - last_file_check > 2.0:
             _update_progress_placeholder(progress_ph, session_path)
             _update_code_placeholder(code_ph, session_path)

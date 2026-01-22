@@ -18,6 +18,31 @@ import streamlit as st
 from ..services.agent_runner import StreamEvent
 
 
+# Constants for file pattern matching
+TASK_FILE_PATTERNS = ["eval_tasks.json"]
+CODE_FILE_PATTERNS = ["evaluation/"]
+
+
+def _detect_file_write(tool_name: str, tool_input: dict) -> tuple[bool, bool]:
+    """Detect if a tool call writes to task or code files.
+
+    Args:
+        tool_name: Name of the tool being called.
+        tool_input: Input parameters for the tool.
+
+    Returns:
+        Tuple of (refresh_tasks, refresh_code) booleans.
+    """
+    if tool_name not in ("Write", "Edit"):
+        return False, False
+
+    file_path = tool_input.get("file_path", "") or tool_input.get("path", "")
+    refresh_tasks = any(p in file_path for p in TASK_FILE_PATTERNS)
+    refresh_code = any(p in file_path for p in CODE_FILE_PATTERNS)
+
+    return refresh_tasks, refresh_code
+
+
 @dataclass
 class IterationRecord:
     """Record of a completed iteration (initializer or worker session).
@@ -63,6 +88,15 @@ def render_output_stream() -> None:
         st.session_state["iteration_history"] = []
     if "current_iteration_record" not in st.session_state:
         st.session_state["current_iteration_record"] = None
+    # File change detection flags for immediate refresh
+    if "pending_task_refresh" not in st.session_state:
+        st.session_state["pending_task_refresh"] = False
+    if "pending_code_refresh" not in st.session_state:
+        st.session_state["pending_code_refresh"] = False
+    if "task_refresh_ready" not in st.session_state:
+        st.session_state["task_refresh_ready"] = False
+    if "code_refresh_ready" not in st.session_state:
+        st.session_state["code_refresh_ready"] = False
 
     # Metrics row with placeholders for real-time updates
     col1, col2, col3, col4 = st.columns(4)
@@ -136,16 +170,33 @@ def process_stream_event(event: StreamEvent) -> None:
 
     elif event.event_type == "tool_use":
         # Add tool call
+        tool_name = event.data.get("tool_name")
+        tool_input = event.data.get("tool_input", {})
         tool_call = {
-            "tool_name": event.data.get("tool_name"),
-            "tool_input": event.data.get("tool_input"),
+            "tool_name": tool_name,
+            "tool_input": tool_input,
         }
         st.session_state["tool_calls"].append(tool_call)
+
+        # Detect file writes and set pending refresh flags
+        refresh_tasks, refresh_code = _detect_file_write(tool_name, tool_input)
+        if refresh_tasks:
+            st.session_state["pending_task_refresh"] = True
+        if refresh_code:
+            st.session_state["pending_code_refresh"] = True
 
     elif event.event_type == "tool_result":
         # Update last tool call with result
         if st.session_state["tool_calls"]:
             st.session_state["tool_calls"][-1]["tool_result"] = event.data.get("tool_result")
+
+        # Convert pending refresh flags to ready flags (file write completed)
+        if st.session_state.get("pending_task_refresh"):
+            st.session_state["task_refresh_ready"] = True
+            st.session_state["pending_task_refresh"] = False
+        if st.session_state.get("pending_code_refresh"):
+            st.session_state["code_refresh_ready"] = True
+            st.session_state["pending_code_refresh"] = False
 
     elif event.event_type == "result":
         # Final result with cost/usage
@@ -254,6 +305,12 @@ def clear_output(preserve_history: bool = False) -> None:
     st.session_state["total_output_tokens"] = 0
     st.session_state.pop("last_error", None)
     st.session_state.pop("completed", None)
+
+    # Reset file change detection flags
+    st.session_state["pending_task_refresh"] = False
+    st.session_state["pending_code_refresh"] = False
+    st.session_state["task_refresh_ready"] = False
+    st.session_state["code_refresh_ready"] = False
 
     if not preserve_history:
         st.session_state["iteration_history"] = []
