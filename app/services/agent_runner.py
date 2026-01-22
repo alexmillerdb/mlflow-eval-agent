@@ -263,10 +263,23 @@ class AgentRunner:
 
                     self._push_agent_result(result)
 
+                # Session completed successfully - emit session_end
+                self._push_event("status", {
+                    "status": "session_end",
+                    "iteration": iteration,
+                    "phase": prompt_name,
+                })
+
             except Exception as e:
                 self._push_event("error", {
                     "error": str(e),
                     "iteration": iteration,
+                })
+                # Still emit session_end to archive partial progress
+                self._push_event("status", {
+                    "status": "session_end",
+                    "iteration": iteration,
+                    "phase": prompt_name,
                 })
                 # Continue to next iteration on error
 

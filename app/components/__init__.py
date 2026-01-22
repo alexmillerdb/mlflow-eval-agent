@@ -7,6 +7,7 @@ from .output_stream import (
     clear_output,
     render_error_banner,
     render_completion_banner,
+    render_iteration_history,
 )
 from .progress_tracker import render_progress_tracker
 from .code_viewer import render_code_viewer, render_run_instructions
@@ -27,6 +28,7 @@ __all__ = [
     "clear_output",
     "render_error_banner",
     "render_completion_banner",
+    "render_iteration_history",
     "render_progress_tracker",
     "render_code_viewer",
     "render_run_instructions",
