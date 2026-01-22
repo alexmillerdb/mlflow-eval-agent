@@ -33,6 +33,7 @@ from app.components import (
     clear_output,
     render_error_banner,
     render_completion_banner,
+    render_iteration_history,
     render_progress_tracker,
     render_code_viewer,
     render_run_instructions,
@@ -362,6 +363,20 @@ def _stream_autonomous_response():
     tab1, tab2, tab3 = st.tabs(["Output", "Progress", "Generated Code"])
 
     with tab1:
+        # Iteration history placeholder - updated dynamically on session_end events
+        history_ph = st.empty()
+
+        # Helper function to render history into placeholder
+        def _render_history_section():
+            with history_ph.container():
+                render_iteration_history()
+                if st.session_state.get("iteration_history"):
+                    st.divider()
+                st.markdown("### Current Iteration")
+
+        # Initial render
+        _render_history_section()
+
         # Metrics placeholders
         cols = st.columns(4)
         cost_ph = cols[0].empty()
@@ -402,11 +417,14 @@ def _stream_autonomous_response():
         for event in events:
             process_stream_event(event)
 
-            # Check for completion
+            # Check for completion or session end
             if event.event_type == "status":
                 status = event.data.get("status")
                 if status in ("stopped", "completed", "max_iterations"):
                     st.session_state["running"] = False
+                elif status == "session_end":
+                    # Update history when an iteration completes
+                    _render_history_section()
 
         # Update Output placeholders on every iteration (fast)
         _update_output_placeholders(
@@ -467,6 +485,14 @@ def _render_autonomous_mode():
     tab1, tab2, tab3 = st.tabs(["Output", "Progress", "Generated Code"])
 
     with tab1:
+        # Iteration history (completed iterations above current output)
+        render_iteration_history()
+
+        # Divider between history and current/final output
+        if st.session_state.get("iteration_history"):
+            st.divider()
+            st.markdown("### Final Output")
+
         render_output_stream()
 
     with tab2:
