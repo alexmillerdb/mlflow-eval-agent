@@ -17,6 +17,7 @@ import streamlit as st
 from ..auth import UserIdentity
 from ..services.session_manager import list_user_sessions, SessionInfo
 from .output_stream import clear_output
+from .chat_interface import clear_messages
 
 
 def render_sidebar(user: UserIdentity) -> dict:
@@ -119,6 +120,8 @@ def render_sidebar(user: UserIdentity) -> dict:
         st.session_state.pop("agent_session_id", None)
         # Clear all output state including iteration history
         clear_output(preserve_history=False)
+        # Clear interactive mode chat history
+        clear_messages()
         st.rerun()
 
     # Past sessions
