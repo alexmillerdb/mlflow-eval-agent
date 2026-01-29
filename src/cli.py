@@ -178,7 +178,11 @@ Examples:
     elif args.interactive:
         # Interactive mode - free-form queries
         # Guard against running in non-interactive environments (Databricks Jobs)
-        from .runtime import detect_runtime, RuntimeContext
+        from pathlib import Path
+        from .runtime import detect_runtime, RuntimeContext, get_sessions_base_path
+        from .mlflow_ops import set_session_dir, get_tasks_file
+        from .session_sync import should_sync, sync_session_from_uc
+        from .config import Config
 
         runtime = detect_runtime()
         if runtime.context == RuntimeContext.DATABRICKS_JOB:
@@ -186,9 +190,24 @@ Examples:
             logging.error("Use --autonomous mode instead: mlflow-eval -a -e <experiment_id>")
             return
 
+        # Set up session directory for interactive mode
+        config = Config.from_env(validate=False)
+        sessions_base = get_sessions_base_path()
+        session_dir = sessions_base / f"interactive-{config.session_id}"
+        set_session_dir(session_dir)
+
+        # Restore from UC Volume if available
+        if should_sync(runtime.volume_path) and not get_tasks_file().exists():
+            logging.info("Checking UC Volume for existing session...")
+            if sync_session_from_uc(session_dir, session_dir.name, runtime.volume_path):
+                logging.info("Session restored from UC Volume")
+
+        logging.info(f"Session: {session_dir.name}")
+        logging.info(f"Output:  {session_dir}")
+
         from .agent import MLflowAgent
         agent = MLflowAgent()
-        await run_interactive(agent)
+        await run_interactive(agent, session_dir, runtime.volume_path)
 
     elif args.prompt:
         # Single query mode
@@ -202,47 +221,63 @@ Examples:
         parser.print_help()
 
 
-async def run_interactive(agent):
-    """Interactive mode with session continuity."""
+async def run_interactive(agent, session_dir=None, volume_path=None):
+    """Interactive mode with session continuity and UC Volume sync.
+
+    Args:
+        agent: MLflowAgent instance
+        session_dir: Optional session directory path
+        volume_path: Optional UC Volume path for session persistence
+    """
+    from .session_sync import should_sync, sync_session_to_uc
+
     print("MLflow Evaluation Agent (Interactive)")
     print("Commands: 'quit', 'clear', 'new'")
     print("-" * 40)
 
     session_id = None
 
-    while True:
-        try:
-            prompt = input("\nYou: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
+    try:
+        while True:
+            try:
+                prompt = input("\nYou: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
 
-        if prompt.lower() == "quit":
-            break
-        if prompt.lower() == "clear":
-            agent.clear_state()
-            print("State cleared.")
-            continue
-        if prompt.lower() == "new":
-            session_id = None
-            print("New session started.")
-            continue
-        if not prompt:
-            continue
+            if prompt.lower() == "quit":
+                break
+            if prompt.lower() == "clear":
+                agent.clear_state()
+                print("State cleared.")
+                continue
+            if prompt.lower() == "new":
+                session_id = None
+                print("New session started.")
+                continue
+            if not prompt:
+                continue
 
-        print("\nAgent: ", end="", flush=True)
-        result = None
-        async for result in agent.query(prompt, session_id=session_id):
-            pass
+            print("\nAgent: ", end="", flush=True)
+            result = None
+            async for result in agent.query(prompt, session_id=session_id):
+                pass
 
-        if result:
-            print(result.response)
-            if result.session_id:
-                session_id = result.session_id
-            if result.cost_usd:
-                print(f"\n[Cost: ${result.cost_usd:.4f}]")
-            if result.duration_ms:
-                print(f"[Duration: {result.duration_ms}ms]")
+            if result:
+                print(result.response)
+                if result.session_id:
+                    session_id = result.session_id
+                if result.cost_usd:
+                    print(f"\n[Cost: ${result.cost_usd:.4f}]")
+                if result.duration_ms:
+                    print(f"[Duration: {result.duration_ms}ms]")
+
+    finally:
+        # Sync session to UC Volume on exit
+        if session_dir and should_sync(volume_path):
+            print("\nSyncing session to UC Volume...")
+            if sync_session_to_uc(session_dir, session_dir.name, volume_path):
+                print(f"Session synced to {volume_path}")
 
 
 def _make_progress_callback():

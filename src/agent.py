@@ -76,6 +76,8 @@ from claude_agent_sdk import (
 )
 
 from .tools import create_tools, MCPTools, BuiltinTools
+from .mcp.uc_volume import create_uc_volume_server, UCVolumeTools
+from .session_sync import should_sync, sync_session_to_uc, sync_session_from_uc
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -193,15 +195,21 @@ class MLflowAgent:
         """Build agent options with simplified tool set."""
         tools = create_tools()
 
-        mcp_server = create_sdk_mcp_server(
+        mlflow_eval_server = create_sdk_mcp_server(
             name="mlflow-eval",
             version="2.0.0",  # Simplified version
             tools=tools,
         )
 
+        # UC Volume server for Databricks Apps (auto OAuth)
+        uc_volume_server = create_uc_volume_server()
+
         return ClaudeAgentOptions(
             system_prompt=self._build_system_prompt(),
-            mcp_servers={"mlflow-eval": mcp_server},
+            mcp_servers={
+                "mlflow-eval": mlflow_eval_server,
+                "uc-volume": uc_volume_server,
+            },
             resume=session_id,
             allowed_tools=[
                 # Built-in Claude tools
@@ -210,10 +218,14 @@ class MLflowAgent:
                 BuiltinTools.GLOB,
                 BuiltinTools.GREP,
                 BuiltinTools.SKILL,
-                # Our 3 simplified tools
+                # MLflow eval tools
                 MCPTools.MLFLOW_QUERY,
                 MCPTools.MLFLOW_ANNOTATE,
                 MCPTools.SAVE_FINDINGS,
+                # UC Volume tools (for Databricks Apps)
+                UCVolumeTools.SYNC_FROM_UC,
+                UCVolumeTools.SYNC_TO_UC,
+                UCVolumeTools.LIST_UC_DIRECTORY,
             ],
             setting_sources=["project"],
             cwd=str(self.config.working_dir),
@@ -318,6 +330,35 @@ class MLflowAgent:
 AUTO_CONTINUE_DELAY_SECONDS = 3
 
 
+@mlflow.trace(name="autonomous_session")
+async def run_autonomous_session(
+    config: "Config",
+    session_dir: Path,
+    experiment_id: str,
+    is_first_run: bool,
+) -> AsyncIterator[AgentResult]:
+    """Run a single autonomous session (initializer or worker).
+
+    Creates a fresh agent and runs the appropriate prompt.
+    Yields AgentResult events for streaming.
+
+    Args:
+        config: Agent configuration
+        session_dir: Session directory for state files
+        experiment_id: MLflow experiment ID
+        is_first_run: True for initializer, False for worker
+    """
+    agent = MLflowAgent(config)
+
+    prompt_name = "initializer" if is_first_run else "worker"
+    prompt = load_prompt(prompt_name)
+    prompt = prompt.replace("{experiment_id}", experiment_id)
+    prompt = prompt.replace("{session_dir}", str(session_dir))
+
+    async for result in agent.query(prompt):
+        yield result
+
+
 @mlflow.trace(name="autonomous_evaluation", span_type="AGENT")
 async def run_autonomous(
     experiment_id: str,
@@ -336,7 +377,7 @@ async def run_autonomous(
         set_session_dir,
         get_tasks_file,
     )
-    from .runtime import get_sessions_base_path
+    from .runtime import get_sessions_base_path, detect_runtime
     from .config import Config
 
     config = Config.from_env()
@@ -346,6 +387,15 @@ async def run_autonomous(
     sessions_base = get_sessions_base_path()
     session_dir = sessions_base / config.session_id
     set_session_dir(session_dir)
+
+    # Detect runtime for UC Volume sync
+    runtime = detect_runtime()
+
+    # Restore session from UC Volume if local missing (Databricks Apps restart recovery)
+    if should_sync(runtime.volume_path) and not get_tasks_file().exists():
+        logger.info("Checking UC Volume for existing session...")
+        if sync_session_from_uc(session_dir, config.session_id, runtime.volume_path):
+            logger.info("Session restored from UC Volume")
 
     logger.info(f"Session: {config.session_id}")
     logger.info(f"Output:  {session_dir}")
@@ -378,41 +428,28 @@ async def run_autonomous(
             iter_span.set_attribute("iteration", iteration)
             iter_span.set_attribute("phase", "initializer" if is_first_run else "worker")
 
-            # Fresh agent per session (Anthropic pattern)
-            agent = MLflowAgent(config)
-
-            # Choose prompt based on state
             prompt_name = "initializer" if is_first_run else "worker"
-            prompt = load_prompt(prompt_name)
-            prompt = prompt.replace("{experiment_id}", experiment_id)
-            prompt = prompt.replace("{session_dir}", str(session_dir))
-
-            # Start context monitoring for this session
-            context_metrics = start_context_monitoring(
-                session_id=f"{config.session_id}_iter{iteration}",
-                initial_prompt=prompt
-            )
-
             logger.info(f"--- Session {iteration} ({prompt_name}) ---")
 
-            # Run session and stream output
+            # Run session using shared generator
+            result = None
             try:
-                async for result in agent.query(prompt):
+                async for result in run_autonomous_session(
+                    config, session_dir, experiment_id, is_first_run
+                ):
                     if result.event_type == "text":
-                        # Print incremental text (clear line and reprint for streaming effect)
-                        pass  # Text is accumulated in result.response
+                        pass  # Text accumulated in result.response
 
-                # Log final response
-                if result and result.response:
-                    logger.info(f"Response:\n{result.response}")
-                    iter_span.set_attribute("response_length", len(result.response))
+                # Log final result
+                if result and result.event_type == "result":
+                    if result.response:
+                        logger.info(f"Response:\n{result.response}")
+                        iter_span.set_attribute("response_length", len(result.response))
 
-                    # Show cost if available
                     if result.cost_usd:
                         logger.info(f"[Cost: ${result.cost_usd:.4f}]")
                         iter_span.set_attribute("cost_usd", result.cost_usd)
 
-                    # Propagate token tracking to session span
                     if result.usage_data:
                         usage = result.usage_data
                         iter_span.set_attribute("input_tokens", usage.get("input_tokens", 0))
@@ -421,17 +458,6 @@ async def run_autonomous(
                         iter_span.set_attribute("cache_read_input_tokens", usage.get("cache_read_input_tokens", 0))
                         iter_span.set_attribute("total_tokens",
                             usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
-
-                # Log context metrics to span
-                if context_metrics:
-                    iter_span.set_attribute("context_tool_calls", context_metrics.tool_calls)
-                    iter_span.set_attribute("context_estimated_messages", context_metrics.estimated_messages)
-                    iter_span.set_attribute("context_estimated_kb", context_metrics.estimated_context_kb)
-                    logger.info(
-                        f"[Context] {context_metrics.tool_calls} tool calls, "
-                        f"~{context_metrics.estimated_messages} messages, "
-                        f"~{context_metrics.estimated_context_kb:.1f}KB"
-                    )
 
             except KeyboardInterrupt:
                 iter_span.set_attribute("status", "interrupted")
@@ -450,6 +476,10 @@ async def run_autonomous(
                     logger.info("✓ Initializer session complete. Switching to worker mode.")
                 else:
                     logger.warning("⚠ Initializer did not create task file. Will retry initializer session.")
+
+            # Sync session to UC Volume after each session completes
+            if should_sync(runtime.volume_path):
+                sync_session_to_uc(session_dir, config.session_id, runtime.volume_path)
 
         # Progress summary
         print_progress_summary()

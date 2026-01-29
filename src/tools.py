@@ -271,3 +271,7 @@ class BuiltinTools:
     GLOB = "Glob"
     GREP = "Grep"
     SKILL = "Skill"
+
+
+# Re-export UCVolumeTools for convenience
+from .mcp.uc_volume import UCVolumeTools

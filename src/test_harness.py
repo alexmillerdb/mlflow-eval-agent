@@ -70,12 +70,26 @@ async def run_initializer_session(
     from datetime import datetime
 
     from .agent import MLflowAgent, load_prompt, setup_mlflow
+    from .runtime import detect_runtime
+    from .session_sync import should_sync, sync_session_to_uc, sync_session_from_uc
 
     # Set up session directory
     if session_dir is None:
         session_dir = Path(tempfile.mkdtemp(prefix="mlflow-eval-test-"))
 
     set_session_dir(session_dir)
+
+    # Detect runtime for UC Volume sync
+    runtime = detect_runtime()
+
+    # Restore session from UC Volume if local missing (Databricks Apps restart recovery)
+    if should_sync(runtime.volume_path):
+        tasks_file = get_tasks_file()
+        if not tasks_file.exists():
+            logger.info("Checking UC Volume for existing session...")
+            session_id = session_dir.name
+            if sync_session_from_uc(session_dir, session_id, runtime.volume_path):
+                logger.info("Session restored from UC Volume")
 
     # Set up MLflow tracing (if not mock)
     if not mock:
@@ -124,6 +138,11 @@ async def run_initializer_session(
 
     duration_ms = int((time.time() - start_time) * 1000)
 
+    # Sync session to UC Volume after session completes
+    if should_sync(runtime.volume_path):
+        session_id = session_dir.name
+        sync_session_to_uc(session_dir, session_id, runtime.volume_path)
+
     # Verify outputs
     outputs = verify_initializer_outputs(session_dir)
 
@@ -159,6 +178,22 @@ async def run_worker_session(
     import time
 
     from .agent import MLflowAgent, load_prompt, setup_mlflow
+    from .runtime import detect_runtime
+    from .session_sync import should_sync, sync_session_to_uc, sync_session_from_uc
+
+    set_session_dir(session_dir)
+
+    # Detect runtime for UC Volume sync
+    runtime = detect_runtime()
+
+    # Restore session from UC Volume if local missing (Databricks Apps restart recovery)
+    if should_sync(runtime.volume_path):
+        tasks_file_check = get_tasks_file()
+        if not tasks_file_check.exists():
+            logger.info("Checking UC Volume for existing session...")
+            session_id = session_dir.name
+            if sync_session_from_uc(session_dir, session_id, runtime.volume_path):
+                logger.info("Session restored from UC Volume")
 
     # Verify tasks file exists
     tasks_file = get_tasks_file()
@@ -167,8 +202,6 @@ async def run_worker_session(
             success=False,
             error=f"Tasks file not found: {tasks_file}. Run initializer first or use --mock.",
         )
-
-    set_session_dir(session_dir)
 
     # Set up MLflow tracing (if not mock)
     if not mock:
@@ -218,6 +251,11 @@ async def run_worker_session(
         )
 
     duration_ms = int((time.time() - start_time) * 1000)
+
+    # Sync session to UC Volume after session completes
+    if should_sync(runtime.volume_path):
+        session_id = session_dir.name
+        sync_session_to_uc(session_dir, session_id, runtime.volume_path)
 
     # Get task status after worker session
     tasks = json.loads(tasks_file.read_text())
