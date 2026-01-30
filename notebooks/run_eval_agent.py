@@ -15,7 +15,7 @@
 dbutils.widgets.text("experiment_id", "2181280362153689", "Target Experiment ID")
 dbutils.widgets.text("volume_path", "/Volumes/users/alex_miller/mlflow-eval-agent", "Volume Path")
 dbutils.widgets.text("max_iterations", "20", "Max Iterations")
-dbutils.widgets.dropdown("model", "databricks-claude-opus-4-5",
+dbutils.widgets.dropdown("anthropic_model", "databricks-claude-opus-4-5",
     ["databricks-claude-opus-4-5", "databricks-claude-sonnet-4"], "Model")
 dbutils.widgets.text("agent_experiment_id", "159502977489049", "Agent Traces Experiment")
 
@@ -23,7 +23,7 @@ dbutils.widgets.text("agent_experiment_id", "159502977489049", "Agent Traces Exp
 dbutils.widgets.text("secret_scope", "mlflow-eval", "Secret Scope")
 dbutils.widgets.text("secret_key", "databricks-token", "Secret Key")
 dbutils.widgets.text("anthropic_api_key", "", "Anthropic API Key (optional)")
-dbutils.widgets.text("disable_experimental_betas", "1", "Disable Experimental Betas")
+dbutils.widgets.text("anthropic_custom_headers", "x-databricks-use-coding-agent-mode: true", "Anthropic Custom Headers")
 
 # COMMAND ----------
 
@@ -73,13 +73,13 @@ from databricks.sdk import WorkspaceClient
 os.environ["MLFLOW_EXPERIMENT_ID"] = dbutils.widgets.get("experiment_id")
 os.environ["MLFLOW_AGENT_VOLUME_PATH"] = dbutils.widgets.get("volume_path")
 os.environ["MLFLOW_AGENT_EXPERIMENT_ID"] = dbutils.widgets.get("agent_experiment_id")
-os.environ["MODEL"] = dbutils.widgets.get("model")
+os.environ["ANTHROPIC_MODEL"] = dbutils.widgets.get("anthropic_model")
+os.environ["ANTHROPIC_CUSTOM_HEADERS"] = dbutils.widgets.get("anthropic_custom_headers")
 
 # Derive Anthropic base URL from workspace
 w = WorkspaceClient()
 workspace_url = w.config.host.rstrip("/")
 os.environ["ANTHROPIC_BASE_URL"] = f"{workspace_url}/serving-endpoints/anthropic"
-os.environ["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = dbutils.widgets.get("disable_experimental_betas")
 
 # Handle API key - prefer explicit key, fall back to secret scope
 anthropic_api_key = dbutils.widgets.get("anthropic_api_key")
@@ -91,8 +91,7 @@ else:
     secret_key = dbutils.widgets.get("secret_key")
     if secret_scope and secret_key:
         try:
-            auth_token = dbutils.secrets.get(scope=secret_scope, key=secret_key)
-            os.environ["ANTHROPIC_AUTH_TOKEN"] = auth_token
+            os.environ["ANTHROPIC_AUTH_TOKEN"] = dbutils.secrets.get(scope=secret_scope, key=secret_key)
             print(f"Auth token loaded from secret scope: {secret_scope}/{secret_key}")
         except Exception as e:
             print(f"Warning: Could not read secret {secret_scope}/{secret_key}: {e}")
@@ -100,7 +99,7 @@ else:
 print(f"Target experiment: {os.environ['MLFLOW_EXPERIMENT_ID']}")
 print(f"Agent traces experiment: {os.environ['MLFLOW_AGENT_EXPERIMENT_ID']}")
 print(f"Volume path: {os.environ['MLFLOW_AGENT_VOLUME_PATH']}")
-print(f"Model: {os.environ['MODEL']}")
+print(f"Model: {os.environ['ANTHROPIC_MODEL']}")
 print(f"Anthropic base URL: {os.environ['ANTHROPIC_BASE_URL']}")
 
 # COMMAND ----------

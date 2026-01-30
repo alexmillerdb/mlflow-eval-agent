@@ -67,7 +67,7 @@ class Config:
             experiment_id=os.getenv("MLFLOW_EXPERIMENT_ID", ""),
             agent_experiment_id=os.getenv("MLFLOW_AGENT_EXPERIMENT_ID", ""),
             tracking_uri=os.getenv("MLFLOW_TRACKING_URI", "databricks"),
-            model=os.getenv("MODEL", "databricks-claude-opus-4-5"),
+            model=os.getenv("ANTHROPIC_MODEL") or os.getenv("MODEL", "databricks-claude-opus-4-5"),
             session_id=session_id,
         )
 

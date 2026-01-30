@@ -114,8 +114,8 @@ Examples:
                         help="Model to use")
     parser.add_argument("--mlflow-agent-experiment-id", type=str,
                         help="MLflow experiment ID for agent traces")
-    parser.add_argument("--claude-code-disable-experimental-betas", type=str,
-                        help="Disable Claude Code experimental betas")
+    parser.add_argument("--anthropic-custom-headers", type=str,
+                        help="Custom headers for Anthropic API (e.g., 'x-databricks-use-coding-agent-mode: true')")
     parser.add_argument("--secret-scope", type=str,
                         help="Databricks secret scope for auth token")
     parser.add_argument("--secret-key", type=str,
@@ -149,9 +149,9 @@ Examples:
         ("anthropic_base_url", "ANTHROPIC_BASE_URL"),
         ("anthropic_auth_token", "ANTHROPIC_AUTH_TOKEN"),
         ("anthropic_api_key", "ANTHROPIC_API_KEY"),
-        ("model", "DABS_MODEL"),
+        ("model", "ANTHROPIC_MODEL"),
         ("mlflow_agent_experiment_id", "MLFLOW_AGENT_EXPERIMENT_ID"),
-        ("claude_code_disable_experimental_betas", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"),
+        ("anthropic_custom_headers", "ANTHROPIC_CUSTOM_HEADERS"),
     ]
     for arg_name, env_var in env_mappings:
         value = getattr(args, arg_name, None)
