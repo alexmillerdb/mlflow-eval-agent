@@ -30,7 +30,7 @@ variables:
     default: "https://e2-demo-field-eng.cloud.databricks.com/serving-endpoints/anthropic"
 
   # Model selection
-  model:
+  anthropic_model:
     description: "Model to use (databricks-claude-sonnet-4, databricks-claude-opus-4-5)"
     default: "databricks-claude-opus-4-5"
 
@@ -66,6 +66,7 @@ resources:
       environments:
         - environment_key: default
           spec:
+            environment_version: "4"
             dependencies:
               - ./dist/*.whl
 
@@ -92,12 +93,10 @@ resources:
               - "${var.secret_scope}"
               - "--secret-key"
               - "databricks-token"
-              - "--anthropic-api-key"
-              - ""
               - "--model"
-              - "${var.model}"
-              - "--claude-code-disable-experimental-betas"
-              - "1"
+              - "${var.anthropic_model}"
+              - "--anthropic-custom-headers"
+              - "x-databricks-use-coding-agent-mode: true"
               - "--mlflow-agent-experiment-id"
               - "${var.mlflow_agent_experiment_id}"
 
@@ -112,6 +111,7 @@ resources:
       environments:
         - environment_key: default
           spec:
+            environment_version: "4"
             dependencies:
               - ./dist/*.whl
 
@@ -125,12 +125,12 @@ resources:
               experiment_id: "${var.experiment_id}"
               volume_path: "${var.volume_path}"
               max_iterations: "${var.max_iterations}"
-              model: "${var.model}"
+              anthropic_model: "${var.anthropic_model}"
               agent_experiment_id: "${var.mlflow_agent_experiment_id}"
               secret_scope: "${var.secret_scope}"
               secret_key: "databricks-token"
               anthropic_api_key: ""
-              disable_experimental_betas: "1"
+              anthropic_custom_headers: "x-databricks-use-coding-agent-mode: true"
 
 # =============================================================================
 # TARGET ENVIRONMENTS
@@ -146,7 +146,7 @@ targets:
       experiment_id: "2181280362153689"
       volume_path: "/Volumes/users/alex_miller/mlflow-eval-agent"
       anthropic_endpoint: "https://e2-demo-field-eng.cloud.databricks.com/serving-endpoints/anthropic"
-      model: "databricks-claude-opus-4-5"
+      anthropic_model: "databricks-claude-opus-4-5"
       secret_scope: "mlflow-eval"
       mlflow_agent_experiment_id: "159502977489049"
 

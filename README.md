@@ -166,10 +166,11 @@ The agent requires access to Claude models. For Databricks users, use the Founda
 
 ```bash
 # .env - Databricks FM API configuration
-ANTHROPIC_BASE_URL=https://your-workspace.cloud.databricks.com/serving-endpoints
+ANTHROPIC_BASE_URL=https://your-workspace.cloud.databricks.com/serving-endpoints/anthropic
 ANTHROPIC_AUTH_TOKEN=dapi...          # Your Databricks PAT token
 ANTHROPIC_API_KEY=""                  # Required placeholder (must be empty string)
-MODEL=databricks-claude-opus-4-5
+ANTHROPIC_MODEL=databricks-claude-opus-4-5
+ANTHROPIC_CUSTOM_HEADERS=x-databricks-use-coding-agent-mode: true  # Required for Databricks FM API
 ```
 
 Alternatively, use the Anthropic API directly:
@@ -177,7 +178,7 @@ Alternatively, use the Anthropic API directly:
 ```bash
 # .env - Direct Anthropic API
 ANTHROPIC_API_KEY=sk-ant-api03-...
-MODEL=claude-sonnet-4-20250514
+ANTHROPIC_MODEL=claude-sonnet-4-20250514
 ```
 
 See `.env.example` for full configuration options.
