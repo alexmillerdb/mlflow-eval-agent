@@ -52,12 +52,12 @@ class TestMlflowQueryTool:
     @pytest.mark.asyncio
     async def test_search_operation(self, mock_client, session_dir):
         """Test search operation returns trace list."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         query_tool = get_tool_by_name(tools, "mlflow_query")
 
-        with patch("src.mlflow_ops.get_client", return_value=mock_client):
+        with patch("src.agent.mlflow_ops.get_client", return_value=mock_client):
             result = await query_tool({
                 "operation": "search",
                 "experiment_id": "123",
@@ -73,12 +73,12 @@ class TestMlflowQueryTool:
     @pytest.mark.asyncio
     async def test_search_with_filter(self, mock_client, session_dir):
         """Test search with filter string."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         query_tool = get_tool_by_name(tools, "mlflow_query")
 
-        with patch("src.mlflow_ops.get_client", return_value=mock_client):
+        with patch("src.agent.mlflow_ops.get_client", return_value=mock_client):
             result = await query_tool({
                 "operation": "search",
                 "experiment_id": "123",
@@ -92,12 +92,12 @@ class TestMlflowQueryTool:
     @pytest.mark.asyncio
     async def test_get_operation(self, mock_client, session_dir):
         """Test get operation returns trace details."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         query_tool = get_tool_by_name(tools, "mlflow_query")
 
-        with patch("src.mlflow_ops.get_client", return_value=mock_client):
+        with patch("src.agent.mlflow_ops.get_client", return_value=mock_client):
             result = await query_tool({
                 "operation": "get",
                 "trace_id": "tr-sample-001",
@@ -111,13 +111,13 @@ class TestMlflowQueryTool:
     @pytest.mark.asyncio
     async def test_get_with_detail_level(self, mock_client, session_dir):
         """Test get with different detail levels."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         query_tool = get_tool_by_name(tools, "mlflow_query")
 
         for detail_level in ["summary", "analysis", "full"]:
-            with patch("src.mlflow_ops.get_client", return_value=mock_client):
+            with patch("src.agent.mlflow_ops.get_client", return_value=mock_client):
                 result = await query_tool({
                     "operation": "get",
                     "trace_id": "tr-sample-001",
@@ -130,7 +130,7 @@ class TestMlflowQueryTool:
     @pytest.mark.asyncio
     async def test_search_without_experiment_id(self, session_dir):
         """Test search without experiment_id returns error."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         query_tool = get_tool_by_name(tools, "mlflow_query")
@@ -147,7 +147,7 @@ class TestMlflowQueryTool:
     @pytest.mark.asyncio
     async def test_get_without_trace_id(self, session_dir):
         """Test get without trace_id returns error."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         query_tool = get_tool_by_name(tools, "mlflow_query")
@@ -164,7 +164,7 @@ class TestMlflowQueryTool:
     @pytest.mark.asyncio
     async def test_invalid_operation(self, session_dir):
         """Test invalid operation returns error."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         query_tool = get_tool_by_name(tools, "mlflow_query")
@@ -190,12 +190,12 @@ class TestMlflowAnnotateTool:
     @pytest.mark.asyncio
     async def test_tag_operation(self, session_dir):
         """Test tag operation sets tag on trace."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         annotate_tool = get_tool_by_name(tools, "mlflow_annotate")
 
-        with patch("src.mlflow_ops.set_tag") as mock_set_tag:
+        with patch("src.agent.mlflow_ops.set_tag") as mock_set_tag:
             result = await annotate_tool({
                 "operation": "tag",
                 "trace_id": "tr-test-001",
@@ -210,12 +210,12 @@ class TestMlflowAnnotateTool:
     @pytest.mark.asyncio
     async def test_feedback_operation(self, session_dir):
         """Test feedback operation logs feedback."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         annotate_tool = get_tool_by_name(tools, "mlflow_annotate")
 
-        with patch("src.mlflow_ops.log_feedback") as mock_log_feedback:
+        with patch("src.agent.mlflow_ops.log_feedback") as mock_log_feedback:
             result = await annotate_tool({
                 "operation": "feedback",
                 "trace_id": "tr-test-001",
@@ -233,12 +233,12 @@ class TestMlflowAnnotateTool:
     @pytest.mark.asyncio
     async def test_expectation_operation(self, session_dir):
         """Test expectation operation logs expectation."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         annotate_tool = get_tool_by_name(tools, "mlflow_annotate")
 
-        with patch("src.mlflow_ops.log_expectation") as mock_log_expectation:
+        with patch("src.agent.mlflow_ops.log_expectation") as mock_log_expectation:
             result = await annotate_tool({
                 "operation": "expectation",
                 "trace_id": "tr-test-001",
@@ -255,7 +255,7 @@ class TestMlflowAnnotateTool:
     @pytest.mark.asyncio
     async def test_annotate_without_trace_id(self, session_dir):
         """Test annotate without trace_id returns error."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         annotate_tool = get_tool_by_name(tools, "mlflow_annotate")
@@ -274,7 +274,7 @@ class TestMlflowAnnotateTool:
     @pytest.mark.asyncio
     async def test_tag_without_key(self, session_dir):
         """Test tag without key returns error."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         annotate_tool = get_tool_by_name(tools, "mlflow_annotate")
@@ -302,8 +302,8 @@ class TestSaveFindingsTool:
     @pytest.mark.asyncio
     async def test_saves_to_state_file(self, session_dir):
         """Test save_findings creates state file."""
-        from src.tools import create_tools
-        from src.mlflow_ops import get_state_dir
+        from src.agent.tools import create_tools
+        from src.agent.mlflow_ops import get_state_dir
 
         tools = create_tools()
         save_tool = get_tool_by_name(tools, "save_findings")
@@ -329,7 +329,7 @@ class TestSaveFindingsTool:
     @pytest.mark.asyncio
     async def test_returns_confirmation(self, session_dir):
         """Test save_findings returns confirmation."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         save_tool = get_tool_by_name(tools, "save_findings")
@@ -347,7 +347,7 @@ class TestSaveFindingsTool:
     @pytest.mark.asyncio
     async def test_without_key(self, session_dir):
         """Test save_findings without key returns error."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         save_tool = get_tool_by_name(tools, "save_findings")
@@ -364,7 +364,7 @@ class TestSaveFindingsTool:
     @pytest.mark.asyncio
     async def test_without_data(self, session_dir):
         """Test save_findings without data returns error."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         save_tool = get_tool_by_name(tools, "save_findings")
@@ -389,14 +389,14 @@ class TestToolCreation:
 
     def test_create_tools_returns_three_tools(self):
         """create_tools should return exactly 3 tools."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         assert len(tools) == 3
 
     def test_all_tools_are_callable(self):
         """All tools should be callable."""
-        from src.tools import create_tools
+        from src.agent.tools import create_tools
 
         tools = create_tools()
         for tool in tools:
@@ -404,7 +404,7 @@ class TestToolCreation:
 
     def test_tool_names_match_constants(self):
         """Tool names should match MCPTools constants."""
-        from src.tools import create_tools, MCPTools, MCP_SERVER_NAME
+        from src.agent.tools import create_tools, MCPTools, MCP_SERVER_NAME
 
         tools = create_tools()
 

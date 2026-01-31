@@ -159,7 +159,7 @@ Examples:
             os.environ[env_var] = value
 
     # Initialize MLflow AFTER env vars are set (critical for experiment tracing)
-    from .agent import setup_mlflow
+    from .agent.agent import setup_mlflow
     setup_mlflow()
 
     if args.verbose:
@@ -172,13 +172,13 @@ Examples:
             print("Error: --experiment-id or MLFLOW_EXPERIMENT_ID required for autonomous mode")
             return
 
-        from .agent import run_autonomous
+        from .agent.autonomous import run_autonomous
         await run_autonomous(experiment_id, args.max_iterations)
 
     elif args.interactive:
         # Interactive mode - free-form queries
         # Guard against running in non-interactive environments (Databricks Jobs)
-        from .runtime import detect_runtime, RuntimeContext
+        from .core.runtime import detect_runtime, RuntimeContext
 
         runtime = detect_runtime()
         if runtime.context == RuntimeContext.DATABRICKS_JOB:
@@ -186,13 +186,13 @@ Examples:
             logging.error("Use --autonomous mode instead: mlflow-eval -a -e <experiment_id>")
             return
 
-        from .agent import MLflowAgent
+        from .agent.agent import MLflowAgent
         agent = MLflowAgent()
         await run_interactive(agent)
 
     elif args.prompt:
         # Single query mode
-        from .agent import MLflowAgent
+        from .agent.agent import MLflowAgent
         agent = MLflowAgent()
         async for result in agent.query(args.prompt):
             pass
@@ -312,7 +312,7 @@ async def handle_test_command(args):
     """Handle test subcommand for component testing."""
     from pathlib import Path
 
-    from .test_harness import (
+    from tests.harness import (
         run_initializer_session,
         run_worker_session,
         test_tool_direct,
@@ -359,7 +359,7 @@ async def handle_test_command(args):
 
         # Create mock tasks if requested and session_dir is provided
         if args.mock and session_dir:
-            from .mlflow_ops import get_tasks_file, set_session_dir
+            from .agent.mlflow_ops import get_tasks_file, set_session_dir
             set_session_dir(session_dir)
             if not get_tasks_file().exists():
                 print("Creating mock tasks file...")

@@ -20,8 +20,8 @@ class TestInitializerOutputVerification:
 
     def test_verify_with_valid_outputs(self, session_dir):
         """verify_initializer_outputs succeeds with valid files."""
-        from src.test_harness import verify_initializer_outputs
-        from src.mlflow_ops import get_tasks_file, get_state_dir
+        from tests.harness import verify_initializer_outputs
+        from src.agent.mlflow_ops import get_tasks_file, get_state_dir
 
         # Create valid tasks file
         tasks = {
@@ -52,7 +52,7 @@ class TestInitializerOutputVerification:
 
     def test_verify_without_tasks_file(self, session_dir):
         """verify_initializer_outputs fails without tasks file."""
-        from src.test_harness import verify_initializer_outputs
+        from tests.harness import verify_initializer_outputs
 
         result = verify_initializer_outputs(session_dir)
 
@@ -62,8 +62,8 @@ class TestInitializerOutputVerification:
 
     def test_verify_without_analysis_file(self, session_dir):
         """verify_initializer_outputs fails without analysis file."""
-        from src.test_harness import verify_initializer_outputs
-        from src.mlflow_ops import get_tasks_file
+        from tests.harness import verify_initializer_outputs
+        from src.agent.mlflow_ops import get_tasks_file
 
         # Create valid tasks file only
         tasks = {"tasks": [{"id": 1, "name": "Test", "type": "dataset", "status": "pending"}]}
@@ -77,8 +77,8 @@ class TestInitializerOutputVerification:
 
     def test_verify_with_missing_task_fields(self, session_dir):
         """verify_initializer_outputs fails with incomplete tasks."""
-        from src.test_harness import verify_initializer_outputs
-        from src.mlflow_ops import get_tasks_file, get_state_dir
+        from tests.harness import verify_initializer_outputs
+        from src.agent.mlflow_ops import get_tasks_file, get_state_dir
 
         # Create tasks missing required fields
         tasks = {"tasks": [{"id": 1, "name": "Test"}]}  # Missing type, status
@@ -110,7 +110,7 @@ class TestWorkerOutputVerification:
 
     def test_verify_task_found(self, session_with_tasks):
         """verify_worker_outputs finds existing task."""
-        from src.test_harness import verify_worker_outputs
+        from tests.harness import verify_worker_outputs
 
         result = verify_worker_outputs(session_with_tasks, task_id=1)
 
@@ -118,7 +118,7 @@ class TestWorkerOutputVerification:
 
     def test_verify_task_not_found(self, session_with_tasks):
         """verify_worker_outputs handles missing task."""
-        from src.test_harness import verify_worker_outputs
+        from tests.harness import verify_worker_outputs
 
         result = verify_worker_outputs(session_with_tasks, task_id=999)
 
@@ -127,8 +127,8 @@ class TestWorkerOutputVerification:
 
     def test_verify_completed_task(self, session_dir):
         """verify_worker_outputs detects completed task."""
-        from src.test_harness import verify_worker_outputs
-        from src.mlflow_ops import get_tasks_file
+        from tests.harness import verify_worker_outputs
+        from src.agent.mlflow_ops import get_tasks_file
 
         tasks = {"tasks": [{"id": 1, "name": "Test", "type": "dataset", "status": "completed"}]}
         get_tasks_file().write_text(json.dumps(tasks))
@@ -141,7 +141,7 @@ class TestWorkerOutputVerification:
 
     def test_verify_pending_task(self, session_with_tasks):
         """verify_worker_outputs detects pending task."""
-        from src.test_harness import verify_worker_outputs
+        from tests.harness import verify_worker_outputs
 
         result = verify_worker_outputs(session_with_tasks, task_id=1)
 
@@ -151,8 +151,8 @@ class TestWorkerOutputVerification:
 
     def test_verify_artifacts_created(self, session_dir):
         """verify_worker_outputs detects created artifacts."""
-        from src.test_harness import verify_worker_outputs
-        from src.mlflow_ops import get_tasks_file
+        from tests.harness import verify_worker_outputs
+        from src.agent.mlflow_ops import get_tasks_file
 
         # Create tasks file
         tasks = {"tasks": [{"id": 1, "name": "Test", "type": "dataset", "status": "completed"}]}
@@ -181,8 +181,8 @@ class TestMockTasksCreation:
 
     def test_create_mock_tasks_default(self, session_dir):
         """create_mock_tasks creates default task types."""
-        from src.test_harness import create_mock_tasks
-        from src.mlflow_ops import get_tasks_file
+        from tests.harness import create_mock_tasks
+        from src.agent.mlflow_ops import get_tasks_file
 
         tasks_file = create_mock_tasks(session_dir)
 
@@ -199,7 +199,7 @@ class TestMockTasksCreation:
 
     def test_create_mock_tasks_custom_types(self, session_dir):
         """create_mock_tasks with custom task types."""
-        from src.test_harness import create_mock_tasks
+        from tests.harness import create_mock_tasks
 
         tasks_file = create_mock_tasks(session_dir, task_types=["dataset", "scorer"])
 
@@ -210,8 +210,8 @@ class TestMockTasksCreation:
 
     def test_create_mock_analysis(self, session_dir):
         """create_mock_analysis creates valid analysis file."""
-        from src.test_harness import create_mock_analysis
-        from src.mlflow_ops import get_state_dir
+        from tests.harness import create_mock_analysis
+        from src.agent.mlflow_ops import get_state_dir
 
         analysis_file = create_mock_analysis(session_dir, "test-exp-123")
 
@@ -234,7 +234,7 @@ class TestTaskProgress:
 
     def test_picks_first_pending_task(self, session_with_tasks):
         """Worker should pick first pending task."""
-        from src.mlflow_ops import get_tasks_file
+        from src.agent.mlflow_ops import get_tasks_file
 
         data = json.loads(get_tasks_file().read_text())
         tasks = data.get("tasks", [])
@@ -246,7 +246,7 @@ class TestTaskProgress:
 
     def test_task_status_update(self, session_with_tasks):
         """Task status can be updated."""
-        from src.mlflow_ops import get_tasks_file
+        from src.agent.mlflow_ops import get_tasks_file
 
         tasks_file = get_tasks_file()
         data = json.loads(tasks_file.read_text())
@@ -261,7 +261,7 @@ class TestTaskProgress:
 
     def test_respects_attempt_limit(self, session_dir):
         """Task with max attempts is marked failed."""
-        from src.mlflow_ops import get_tasks_file, increment_task_attempts, MAX_TASK_ATTEMPTS
+        from src.agent.mlflow_ops import get_tasks_file, increment_task_attempts, MAX_TASK_ATTEMPTS
 
         # Create task at max attempts
         tasks = {"tasks": [{"id": 1, "name": "Test", "status": "pending", "attempts": MAX_TASK_ATTEMPTS}]}
@@ -286,7 +286,7 @@ class TestSessionState:
 
     def test_state_isolation_between_sessions(self, tmp_path):
         """Each session should have isolated state."""
-        from src.mlflow_ops import set_session_dir, save_state, load_state
+        from src.agent.mlflow_ops import set_session_dir, save_state, load_state
 
         # Session 1
         session1 = tmp_path / "session1"
@@ -307,7 +307,7 @@ class TestSessionState:
 
     def test_state_persists_across_calls(self, session_dir):
         """State should persist between load calls."""
-        from src.mlflow_ops import save_state, load_state
+        from src.agent.mlflow_ops import save_state, load_state
 
         save_state("persist_test", {"count": 42, "name": "test"})
 
@@ -320,7 +320,7 @@ class TestSessionState:
 
     def test_load_missing_state_returns_none(self, session_dir):
         """Loading non-existent state returns None."""
-        from src.mlflow_ops import load_state
+        from src.agent.mlflow_ops import load_state
 
         result = load_state("nonexistent_key")
         assert result is None
@@ -336,7 +336,7 @@ class TestTestHarnessFunctions:
 
     def test_print_test_result_pass(self, capsys):
         """print_test_result shows PASS for success."""
-        from src.test_harness import TestResult, print_test_result
+        from tests.harness import TestResult, print_test_result
 
         result = TestResult(
             success=True,
@@ -352,7 +352,7 @@ class TestTestHarnessFunctions:
 
     def test_print_test_result_fail(self, capsys):
         """print_test_result shows FAIL for failure."""
-        from src.test_harness import TestResult, print_test_result
+        from tests.harness import TestResult, print_test_result
 
         result = TestResult(
             success=False,
@@ -367,7 +367,7 @@ class TestTestHarnessFunctions:
 
     def test_print_test_result_verbose(self, capsys):
         """print_test_result shows outputs when verbose."""
-        from src.test_harness import TestResult, print_test_result
+        from tests.harness import TestResult, print_test_result
 
         result = TestResult(
             success=True,

@@ -25,7 +25,7 @@ def session_dir(tmp_path):
 
     Sets up the session directory in mlflow_ops for the test.
     """
-    from src.mlflow_ops import set_session_dir
+    from src.agent.mlflow_ops import set_session_dir
 
     set_session_dir(tmp_path)
     return tmp_path
@@ -34,7 +34,7 @@ def session_dir(tmp_path):
 @pytest.fixture
 def session_with_tasks(session_dir):
     """Create a session directory with sample tasks file."""
-    from src.mlflow_ops import get_tasks_file
+    from src.agent.mlflow_ops import get_tasks_file
 
     tasks = {
         "tasks": [
@@ -54,7 +54,7 @@ def session_with_tasks(session_dir):
 @pytest.fixture
 def session_with_analysis(session_dir):
     """Create a session directory with analysis file."""
-    from src.mlflow_ops import get_state_dir
+    from src.agent.mlflow_ops import get_state_dir
 
     analysis = {
         "experiment_id": "test-experiment-123",
@@ -185,7 +185,7 @@ def mock_mlflow_client(sample_trace_list, sample_trace_data):
 @pytest.fixture
 def mock_mlflow_ops(mock_mlflow_client):
     """Patch mlflow_ops.get_client to return mock client."""
-    with patch("src.mlflow_ops.get_client", return_value=mock_mlflow_client):
+    with patch("src.agent.mlflow_ops.get_client", return_value=mock_mlflow_client):
         yield mock_mlflow_client
 
 
@@ -202,7 +202,7 @@ def local_mlflow_env(monkeypatch):
     monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
 
     # Clear cached client
-    from src.mlflow_ops import clear_client_cache
+    from src.agent.mlflow_ops import clear_client_cache
     clear_client_cache()
 
     yield
@@ -217,7 +217,7 @@ def databricks_env(monkeypatch):
     monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "test")
 
     # Clear cached client
-    from src.mlflow_ops import clear_client_cache
+    from src.agent.mlflow_ops import clear_client_cache
     clear_client_cache()
 
     yield
@@ -228,7 +228,7 @@ def databricks_env(monkeypatch):
 @pytest.fixture
 def clean_mlflow_state():
     """Clean up MLflow-related global state before and after tests."""
-    from src.mlflow_ops import (
+    from src.agent.mlflow_ops import (
         clear_client_cache,
         clear_trace_cache,
         _reset_context_metrics,

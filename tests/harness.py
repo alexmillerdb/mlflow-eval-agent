@@ -18,8 +18,8 @@ from typing import Any, Callable, Optional
 
 import mlflow
 
-from .config import Config
-from .mlflow_ops import (
+from src.core.config import Config
+from src.agent.mlflow_ops import (
     set_session_dir,
     get_tasks_file,
     get_state_dir,
@@ -69,7 +69,8 @@ async def run_initializer_session(
     import time
     from datetime import datetime
 
-    from .agent import MLflowAgent, load_prompt, setup_mlflow
+    from src.agent.agent import MLflowAgent, setup_mlflow
+    from src.agent.prompts import load_prompt
 
     # Set up session directory
     if session_dir is None:
@@ -158,7 +159,8 @@ async def run_worker_session(
     """
     import time
 
-    from .agent import MLflowAgent, load_prompt, setup_mlflow
+    from src.agent.agent import MLflowAgent, setup_mlflow
+    from src.agent.prompts import load_prompt
 
     # Verify tasks file exists
     tasks_file = get_tasks_file()
@@ -266,8 +268,8 @@ async def test_tool_direct(
     import time
     import tempfile
 
-    from .tools import create_tools
-    from .mlflow_ops import text_result
+    from src.agent.tools import create_tools
+    from src.agent.mlflow_ops import text_result
 
     # Set up session directory for save_findings
     if tool_name == "save_findings":
@@ -564,8 +566,9 @@ async def run_integration_test(
     import tempfile
     import time
 
-    from .agent import run_autonomous, setup_mlflow
-    from .mlflow_ops import get_task_status
+    from src.agent.autonomous import run_autonomous
+    from src.agent.agent import setup_mlflow
+    from src.agent.mlflow_ops import get_task_status
 
     # Set up session directory
     session_dir = Path(tempfile.mkdtemp(prefix="mlflow-eval-integration-test-"))

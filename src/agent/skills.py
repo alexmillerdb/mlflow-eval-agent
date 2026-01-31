@@ -99,7 +99,7 @@ def parse_skill_index(skills_dir: Optional[Path] = None) -> dict[str, SkillMeta]
     """
     if skills_dir is None:
         # Default to .claude/skills/ relative to project root
-        project_root = Path(__file__).parent.parent
+        project_root = Path(__file__).parent.parent.parent
         skills_dir = project_root / ".claude" / "skills"
 
     skills: dict[str, SkillMeta] = {}
@@ -206,7 +206,7 @@ def get_skill_gotchas(skill_name: str, skills_dir: Optional[Path] = None) -> Opt
         Content of GOTCHAS.md or None if not found
     """
     if skills_dir is None:
-        project_root = Path(__file__).parent.parent
+        project_root = Path(__file__).parent.parent.parent
         skills_dir = project_root / ".claude" / "skills"
 
     gotchas_path = skills_dir / skill_name / "references" / "GOTCHAS.md"
@@ -227,7 +227,7 @@ def get_skill_references(skill_name: str, skills_dir: Optional[Path] = None) -> 
         Dictionary mapping reference names to file paths
     """
     if skills_dir is None:
-        project_root = Path(__file__).parent.parent
+        project_root = Path(__file__).parent.parent.parent
         skills_dir = project_root / ".claude" / "skills"
 
     refs_dir = skills_dir / skill_name / "references"

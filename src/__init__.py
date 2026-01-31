@@ -6,8 +6,8 @@ Simplified architecture following Anthropic best practices:
 - External prompts (vs hardcoded)
 """
 
-from .agent import MLflowAgent, AgentResult
-from .config import Config
+from .agent.agent import MLflowAgent, AgentResult
+from .core.config import Config
 
 __all__ = [
     "MLflowAgent",
