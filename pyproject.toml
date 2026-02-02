@@ -12,6 +12,15 @@ dependencies = [
     "databricks-sdk",
     "anthropic",
     "nest-asyncio>=1.6.0",
+    "streamlit>=1.38.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-playwright>=0.4.4",
+    "pytest-base-url>=2.0.0",
 ]
 
 [project.scripts]
@@ -23,3 +32,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src", "prompts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "e2e: end-to-end tests (deselect with '-m \"not e2e\"')",
+    "visual: visual regression tests",
+]

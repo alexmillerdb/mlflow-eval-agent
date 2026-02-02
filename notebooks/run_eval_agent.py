@@ -111,7 +111,7 @@ print(f"Anthropic base URL: {os.environ['ANTHROPIC_BASE_URL']}")
 
 # Import and initialize
 from src.agent import setup_mlflow, run_autonomous
-from src.config import Config
+from src.core.config import Config
 
 # Enable tracing + autolog (MLflow notebook integration shows traces automatically)
 setup_mlflow()

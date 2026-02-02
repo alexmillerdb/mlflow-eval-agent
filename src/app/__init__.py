@@ -1,6 +1,8 @@
 """Application layer for MLflow Evaluation Agent.
 
-Reserved for future Databricks App components.
+Provides Streamlit chat interface and async-to-sync streaming utilities.
 """
 
-__all__ = []
+from .streaming import async_to_sync_generator
+
+__all__ = ["async_to_sync_generator"]
