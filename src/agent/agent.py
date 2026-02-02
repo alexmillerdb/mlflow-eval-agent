@@ -161,10 +161,18 @@ class MLflowAgent:
                 BuiltinTools.GLOB,
                 BuiltinTools.GREP,
                 BuiltinTools.SKILL,
-                # Our 3 simplified tools
+                # MLflow tools
                 MCPTools.MLFLOW_QUERY,
                 MCPTools.MLFLOW_ANNOTATE,
                 MCPTools.SAVE_FINDINGS,
+                # File tools - UC Volume
+                MCPTools.UC_VOLUME_READ,
+                MCPTools.UC_VOLUME_WRITE,
+                MCPTools.UC_VOLUME_LIST,
+                # File tools - Workspace
+                MCPTools.WORKSPACE_READ,
+                MCPTools.WORKSPACE_WRITE,
+                MCPTools.WORKSPACE_LIST,
             ],
             setting_sources=["project"],
             cwd=str(self.config.working_dir),

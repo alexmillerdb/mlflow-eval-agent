@@ -387,12 +387,12 @@ class TestSaveFindingsTool:
 class TestToolCreation:
     """Tests for tool creation and registration."""
 
-    def test_create_tools_returns_three_tools(self):
-        """create_tools should return exactly 3 tools."""
+    def test_create_tools_returns_nine_tools(self):
+        """create_tools should return exactly 9 tools."""
         from src.agent.tools import create_tools
 
         tools = create_tools()
-        assert len(tools) == 3
+        assert len(tools) == 9
 
     def test_all_tools_are_callable(self):
         """All tools should be callable."""
@@ -416,5 +416,9 @@ class TestToolCreation:
                 tool_names.add(wrapped.name)
 
         # Check that expected tools exist
-        expected_names = {"mlflow_query", "mlflow_annotate", "save_findings"}
+        expected_names = {
+            "mlflow_query", "mlflow_annotate", "save_findings",
+            "uc_volume_read", "uc_volume_write", "uc_volume_list",
+            "workspace_read", "workspace_write", "workspace_list",
+        }
         assert expected_names == tool_names

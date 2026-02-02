@@ -1,7 +1,11 @@
-"""Simplified MCP tools for the MLflow Evaluation Agent.
+"""MCP tools for the MLflow Evaluation Agent.
 
-Reduced from 11 tools to 3 following "one-agent-one-tool" principle.
-Each tool handles a category of operations rather than individual actions.
+Tools:
+- mlflow_query: Search and retrieve MLflow traces and runs
+- mlflow_annotate: Add tags, feedback, and expectations to traces
+- save_findings: Persist analysis state to JSON files
+- uc_volume_read/write/list: Unity Catalog Volume file operations
+- workspace_read/write/list: Databricks Workspace file operations
 """
 
 import json
@@ -13,15 +17,16 @@ from claude_agent_sdk import tool
 
 from . import mlflow_ops
 from .mlflow_ops import record_tool_call
+from ..core import files
 
 logger = logging.getLogger(__name__)
 
 
 def create_tools() -> list:
-    """Create the 3 essential MCP tools.
+    """Create the MCP tools for the agent.
 
     Returns:
-        List of tool functions for the MCP server
+        List of tool functions for the MCP server (9 tools total)
     """
 
     @mlflow.trace(name="tool_mlflow_query", span_type="TOOL")
@@ -247,7 +252,220 @@ def create_tools() -> list:
             logger.exception("Error saving findings")
             return mlflow_ops.text_result(f"[State] Error: {str(e)}")
 
-    return [mlflow_query_tool, mlflow_annotate_tool, save_findings_tool]
+    # =========================================================================
+    # UC VOLUME FILE TOOLS
+    # =========================================================================
+
+    @mlflow.trace(name="tool_uc_volume_read", span_type="TOOL")
+    @tool(
+        "uc_volume_read",
+        "Read text file from Unity Catalog Volume. Path can be absolute (/Volumes/...) or relative to UC_VOLUME base.",
+        {"path": str}
+    )
+    async def uc_volume_read_tool(args: dict[str, Any]) -> dict[str, Any]:
+        """Read text file from Unity Catalog Volume.
+
+        Args:
+            path: File path (absolute /Volumes/... or relative to volume base)
+        """
+        try:
+            path = args.get("path", "")
+            if not path:
+                return mlflow_ops.text_result("[Files] Error: path required")
+
+            content = files.uc_volume_read(path)
+            result = mlflow_ops.text_result(content)
+            record_tool_call("uc_volume_read", len(str(args)), len(str(result)))
+            return result
+
+        except files.FilesSDKError as e:
+            return mlflow_ops.text_result(str(e))
+        except Exception as e:
+            logger.exception("Error reading UC Volume file")
+            return mlflow_ops.text_result(f"[Files] Error: {str(e)}")
+
+    @mlflow.trace(name="tool_uc_volume_write", span_type="TOOL")
+    @tool(
+        "uc_volume_write",
+        "Write text file to Unity Catalog Volume. Path can be absolute (/Volumes/...) or relative to UC_VOLUME base.",
+        {"path": str, "content": str}
+    )
+    async def uc_volume_write_tool(args: dict[str, Any]) -> dict[str, Any]:
+        """Write text file to Unity Catalog Volume.
+
+        Args:
+            path: File path (absolute /Volumes/... or relative to volume base)
+            content: Text content to write
+        """
+        try:
+            path = args.get("path", "")
+            content = args.get("content", "")
+            if not path:
+                return mlflow_ops.text_result("[Files] Error: path required")
+            if not content:
+                return mlflow_ops.text_result("[Files] Error: content required")
+
+            full_path = files.uc_volume_write(path, content)
+            result = mlflow_ops.text_result(f"[Files] Written: {full_path}")
+            record_tool_call("uc_volume_write", len(str(args)), len(str(result)))
+            return result
+
+        except files.FilesSDKError as e:
+            return mlflow_ops.text_result(str(e))
+        except Exception as e:
+            logger.exception("Error writing UC Volume file")
+            return mlflow_ops.text_result(f"[Files] Error: {str(e)}")
+
+    @mlflow.trace(name="tool_uc_volume_list", span_type="TOOL")
+    @tool(
+        "uc_volume_list",
+        "List contents of Unity Catalog Volume directory. Path can be absolute (/Volumes/...) or relative to UC_VOLUME base. Empty path lists volume root.",
+        {"path": str}
+    )
+    async def uc_volume_list_tool(args: dict[str, Any]) -> dict[str, Any]:
+        """List contents of Unity Catalog Volume directory.
+
+        Args:
+            path: Directory path (absolute or relative, empty for volume root)
+        """
+        try:
+            path = args.get("path", "")
+
+            items = files.uc_volume_list(path)
+
+            # Format as table
+            if not items:
+                result = mlflow_ops.text_result("[Files] Directory is empty")
+            else:
+                lines = ["| Name | Type | Size |", "|------|------|------|"]
+                for item in items:
+                    item_type = "DIR" if item.get("is_directory") else "FILE"
+                    size = item.get("size") or "-"
+                    lines.append(f"| {item['name']} | {item_type} | {size} |")
+                result = mlflow_ops.text_result("\n".join(lines))
+
+            record_tool_call("uc_volume_list", len(str(args)), len(str(result)))
+            return result
+
+        except files.FilesSDKError as e:
+            return mlflow_ops.text_result(str(e))
+        except Exception as e:
+            logger.exception("Error listing UC Volume directory")
+            return mlflow_ops.text_result(f"[Files] Error: {str(e)}")
+
+    # =========================================================================
+    # WORKSPACE FILE TOOLS
+    # =========================================================================
+
+    @mlflow.trace(name="tool_workspace_read", span_type="TOOL")
+    @tool(
+        "workspace_read",
+        "Read file from Databricks Workspace. Path will be prefixed with /Workspace/ if needed.",
+        {"path": str}
+    )
+    async def workspace_read_tool(args: dict[str, Any]) -> dict[str, Any]:
+        """Read file from Databricks Workspace.
+
+        Args:
+            path: File path (will be prefixed with /Workspace/ if needed)
+        """
+        try:
+            path = args.get("path", "")
+            if not path:
+                return mlflow_ops.text_result("[Workspace] Error: path required")
+
+            content = files.workspace_read(path)
+            result = mlflow_ops.text_result(content)
+            record_tool_call("workspace_read", len(str(args)), len(str(result)))
+            return result
+
+        except files.FilesSDKError as e:
+            return mlflow_ops.text_result(str(e))
+        except Exception as e:
+            logger.exception("Error reading Workspace file")
+            return mlflow_ops.text_result(f"[Workspace] Error: {str(e)}")
+
+    @mlflow.trace(name="tool_workspace_write", span_type="TOOL")
+    @tool(
+        "workspace_write",
+        "Write file to Databricks Workspace. Path will be prefixed with /Workspace/ if needed.",
+        {"path": str, "content": str}
+    )
+    async def workspace_write_tool(args: dict[str, Any]) -> dict[str, Any]:
+        """Write file to Databricks Workspace.
+
+        Args:
+            path: File path (will be prefixed with /Workspace/ if needed)
+            content: Text content to write
+        """
+        try:
+            path = args.get("path", "")
+            content = args.get("content", "")
+            if not path:
+                return mlflow_ops.text_result("[Workspace] Error: path required")
+            if not content:
+                return mlflow_ops.text_result("[Workspace] Error: content required")
+
+            full_path = files.workspace_write(path, content)
+            result = mlflow_ops.text_result(f"[Workspace] Written: {full_path}")
+            record_tool_call("workspace_write", len(str(args)), len(str(result)))
+            return result
+
+        except files.FilesSDKError as e:
+            return mlflow_ops.text_result(str(e))
+        except Exception as e:
+            logger.exception("Error writing Workspace file")
+            return mlflow_ops.text_result(f"[Workspace] Error: {str(e)}")
+
+    @mlflow.trace(name="tool_workspace_list", span_type="TOOL")
+    @tool(
+        "workspace_list",
+        "List contents of Databricks Workspace directory. Path will be prefixed with /Workspace/ if needed.",
+        {"path": str}
+    )
+    async def workspace_list_tool(args: dict[str, Any]) -> dict[str, Any]:
+        """List contents of Databricks Workspace directory.
+
+        Args:
+            path: Directory path (default /Workspace)
+        """
+        try:
+            path = args.get("path", "/Workspace")
+
+            items = files.workspace_list(path)
+
+            # Format as table
+            if not items:
+                result = mlflow_ops.text_result("[Workspace] Directory is empty")
+            else:
+                lines = ["| Name | Type |", "|------|------|"]
+                for item in items:
+                    lines.append(f"| {item['name']} | {item['type']} |")
+                result = mlflow_ops.text_result("\n".join(lines))
+
+            record_tool_call("workspace_list", len(str(args)), len(str(result)))
+            return result
+
+        except files.FilesSDKError as e:
+            return mlflow_ops.text_result(str(e))
+        except Exception as e:
+            logger.exception("Error listing Workspace directory")
+            return mlflow_ops.text_result(f"[Workspace] Error: {str(e)}")
+
+    return [
+        # MLflow tools
+        mlflow_query_tool,
+        mlflow_annotate_tool,
+        save_findings_tool,
+        # UC Volume tools
+        uc_volume_read_tool,
+        uc_volume_write_tool,
+        uc_volume_list_tool,
+        # Workspace tools
+        workspace_read_tool,
+        workspace_write_tool,
+        workspace_list_tool,
+    ]
 
 
 # =============================================================================
@@ -258,10 +476,19 @@ MCP_SERVER_NAME = "mlflow-eval"
 
 
 class MCPTools:
-    """Tool names for the simplified MCP server."""
+    """Tool names for the MCP server."""
+    # MLflow tools
     MLFLOW_QUERY = f"mcp__{MCP_SERVER_NAME}__mlflow_query"
     MLFLOW_ANNOTATE = f"mcp__{MCP_SERVER_NAME}__mlflow_annotate"
     SAVE_FINDINGS = f"mcp__{MCP_SERVER_NAME}__save_findings"
+    # UC Volume tools
+    UC_VOLUME_READ = f"mcp__{MCP_SERVER_NAME}__uc_volume_read"
+    UC_VOLUME_WRITE = f"mcp__{MCP_SERVER_NAME}__uc_volume_write"
+    UC_VOLUME_LIST = f"mcp__{MCP_SERVER_NAME}__uc_volume_list"
+    # Workspace tools
+    WORKSPACE_READ = f"mcp__{MCP_SERVER_NAME}__workspace_read"
+    WORKSPACE_WRITE = f"mcp__{MCP_SERVER_NAME}__workspace_write"
+    WORKSPACE_LIST = f"mcp__{MCP_SERVER_NAME}__workspace_list"
 
 
 class BuiltinTools:
