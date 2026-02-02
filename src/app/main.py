@@ -17,6 +17,7 @@ if __name__ == "__main__":
 import streamlit as st
 
 from src.app.streaming import async_to_sync_generator
+from src.app.components import render_sidebar, render_task_progress, render_task_list
 
 
 # Page configuration
@@ -35,36 +36,53 @@ def initialize_session_state():
         st.session_state.session_id = None
     if "initialized" not in st.session_state:
         st.session_state.initialized = False
+    if "auto_running" not in st.session_state:
+        st.session_state.auto_running = False
 
 
-def setup_sidebar():
-    """Configure sidebar with experiment settings and session controls."""
-    with st.sidebar:
-        st.header("Configuration")
+def render_autonomous_tab():
+    """Render autonomous evaluation mode controls."""
+    st.subheader("Autonomous Evaluation")
 
-        # Experiment ID input
-        experiment_id = st.text_input(
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        auto_exp_id = st.text_input(
             "Experiment ID",
             value=os.getenv("MLFLOW_EXPERIMENT_ID", ""),
-            help="MLflow experiment ID to analyze",
+            key="auto_exp_id",
+        )
+    with col2:
+        max_iterations = st.number_input(
+            "Max Iterations",
+            min_value=1,
+            max_value=50,
+            value=10,
+            key="max_iterations",
         )
 
-        # Store in environment for agent to pick up
-        if experiment_id:
-            os.environ["MLFLOW_EXPERIMENT_ID"] = experiment_id
+    if st.button("▶️ Start Autonomous Run", type="primary"):
+        if not auto_exp_id:
+            st.error("Please enter an Experiment ID")
+            return
 
-        st.divider()
+        os.environ["MLFLOW_EXPERIMENT_ID"] = auto_exp_id
+        st.session_state.auto_running = True
 
-        # Session controls
-        st.subheader("Session")
+        with st.spinner("Running autonomous evaluation..."):
+            from src.agent.autonomous import run_autonomous
+            import asyncio
+            asyncio.run(run_autonomous(auto_exp_id, max_iterations))
 
-        if st.session_state.session_id:
-            st.caption(f"ID: {st.session_state.session_id[:16]}...")
+        st.session_state.auto_running = False
+        st.success("Autonomous run complete!")
+        st.rerun()
 
-        if st.button("New Session", type="secondary"):
-            st.session_state.messages = []
-            st.session_state.session_id = None
-            st.rerun()
+    # Progress display
+    st.divider()
+    render_task_progress()
+
+    with st.expander("📋 Task Details"):
+        render_task_list()
 
 
 def display_chat_history():
@@ -148,9 +166,16 @@ def main():
     st.title("MLflow Eval Agent")
 
     initialize_session_state()
-    setup_sidebar()
-    display_chat_history()
-    handle_user_input()
+    render_sidebar()
+
+    tab1, tab2 = st.tabs(["💬 Interactive", "🤖 Autonomous"])
+
+    with tab1:
+        display_chat_history()
+        handle_user_input()
+
+    with tab2:
+        render_autonomous_tab()
 
 
 if __name__ == "__main__":

@@ -1,9 +1,14 @@
 """E2E test fixtures for Streamlit app."""
+import os
 import pytest
 import subprocess
 import time
 import socket
 from playwright.sync_api import Page
+
+WEBAPP_TESTING_SCRIPTS = os.path.expanduser(
+    "~/.claude/plugins/cache/anthropic-agent-skills/example-skills/00756142ab04/skills/webapp-testing/scripts"
+)
 
 
 def find_free_port():
@@ -35,3 +40,9 @@ def app_page(page: Page, streamlit_server: str):
     page.goto(streamlit_server)
     page.wait_for_selector('[data-testid="stAppViewContainer"]', timeout=10000)
     return page
+
+
+@pytest.fixture
+def with_server_script():
+    """Path to with_server.py helper."""
+    return os.path.join(WEBAPP_TESTING_SCRIPTS, "with_server.py")

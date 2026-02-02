@@ -1,8 +1,9 @@
-"""Runtime environment detection for Databricks Jobs.
+"""Runtime environment detection for Databricks Jobs and Apps.
 
 Detects execution context and provides appropriate paths for:
 - Local development
 - Databricks Jobs (with Unity Catalog Volume storage)
+- Databricks Apps (Streamlit with OAuth)
 """
 
 import logging
@@ -18,6 +19,7 @@ class RuntimeContext(Enum):
     """Runtime execution context."""
     LOCAL = "local"
     DATABRICKS_JOB = "databricks_job"
+    DATABRICKS_APP = "databricks_app"
 
 
 @dataclass
@@ -27,20 +29,24 @@ class RuntimeInfo:
     job_id: str | None = None
     job_run_id: str | None = None
     volume_path: str | None = None
+    app_name: str | None = None
 
     @property
     def is_databricks(self) -> bool:
         """Check if running in Databricks."""
-        return self.context == RuntimeContext.DATABRICKS_JOB
+        return self.context in (RuntimeContext.DATABRICKS_JOB, RuntimeContext.DATABRICKS_APP)
 
     @property
     def session_prefix(self) -> str:
         """Generate session ID prefix based on context.
 
-        Returns 'job-{id}-run-{id}' for Databricks Jobs, empty string otherwise.
+        Returns 'job-{id}-run-{id}' for Databricks Jobs,
+        'app-{name}' for Databricks Apps, empty string otherwise.
         """
         if self.context == RuntimeContext.DATABRICKS_JOB and self.job_id and self.job_run_id:
             return f"job-{self.job_id}-run-{self.job_run_id}"
+        if self.context == RuntimeContext.DATABRICKS_APP and self.app_name:
+            return f"app-{self.app_name}"
         return ""
 
 
@@ -48,6 +54,7 @@ def detect_runtime() -> RuntimeInfo:
     """Detect the current runtime environment.
 
     Environment variable detection:
+    - DATABRICKS_APP_NAME: Set by Databricks Apps platform
     - DB_IS_JOB: Set to 'TRUE' by Databricks in job context
     - DB_JOB_ID / DATABRICKS_JOB_ID: Job identifier
     - DB_JOB_RUN_ID / DATABRICKS_JOB_RUN_ID: Run identifier
@@ -58,6 +65,16 @@ def detect_runtime() -> RuntimeInfo:
     """
     # Check for explicit volume path (implies Databricks intent)
     volume_path = os.getenv("MLFLOW_AGENT_VOLUME_PATH")
+
+    # Check for Databricks App FIRST (most specific)
+    app_name = os.getenv("DATABRICKS_APP_NAME")
+    if app_name:
+        logger.info(f"Detected Databricks App: {app_name}")
+        return RuntimeInfo(
+            context=RuntimeContext.DATABRICKS_APP,
+            volume_path=volume_path,
+            app_name=app_name,
+        )
 
     # Check Databricks job context - multiple detection methods
     # python_wheel_task in serverless may not set DB_IS_JOB
