@@ -530,6 +530,24 @@ def log_expectation(trace_id: str, name: str, value: Any) -> None:
 # STATE MANAGEMENT (File-based, replaces 787-line workspace.py)
 # =============================================================================
 
+def save_tasks(tasks_data: Any) -> Path:
+    """Save evaluation tasks to {session_dir}/eval_tasks.json (NOT state/).
+
+    Normalizes input to {"tasks": [...]} format.
+    This writes to the session root where get_tasks_file() expects it,
+    NOT to state/ where save_state() would put it.
+    """
+    if isinstance(tasks_data, list):
+        tasks_data = {"tasks": tasks_data}
+    elif isinstance(tasks_data, dict) and "tasks" not in tasks_data:
+        tasks_data = {"tasks": [tasks_data]}
+    path = get_tasks_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(tasks_data, indent=2, default=str))
+    logger.info(f"Tasks saved: {path}")
+    return path
+
+
 def save_state(key: str, data: Any) -> Path:
     """Save analysis state to JSON file.
 

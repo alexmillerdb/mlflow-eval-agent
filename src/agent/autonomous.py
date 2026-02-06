@@ -6,25 +6,38 @@ by iterating through initializer and worker sessions.
 
 import asyncio
 import logging
-from typing import Optional
-
-import mlflow
+from dataclasses import dataclass
+from typing import Optional, AsyncIterator, Callable
 
 logger = logging.getLogger(__name__)
 
 AUTO_CONTINUE_DELAY_SECONDS = 3
+MAX_INITIALIZER_ATTEMPTS = 3
 
 
-@mlflow.trace(name="autonomous_evaluation", span_type="AGENT")
-async def run_autonomous(
+@dataclass
+class AutonomousEvent:
+    """Event emitted during autonomous evaluation for UI streaming."""
+    event_type: str  # "task_header" | "agent_result" | "progress" | "complete" | "error"
+    iteration: Optional[int] = None
+    task_name: Optional[str] = None
+    phase: Optional[str] = None  # "initializer" | "worker"
+    agent_result: Optional["AgentResult"] = None
+    progress_data: Optional[dict] = None
+    error_message: Optional[str] = None
+
+
+async def stream_autonomous(
     experiment_id: str,
     max_iterations: Optional[int] = None,
-) -> None:
-    """Run autonomous evaluation loop with task tracking.
+    abort_check: Optional[Callable[[], bool]] = None,
+) -> AsyncIterator[AutonomousEvent]:
+    """Async generator that yields AutonomousEvent objects during evaluation.
 
     Args:
         experiment_id: MLflow experiment ID to analyze
         max_iterations: Maximum iterations (None = until complete)
+        abort_check: Optional callback returning True to signal abort
     """
     from ..core.config import Config
     from ..core.runtime import detect_runtime, RuntimeContext, get_sessions_base_path
@@ -52,6 +65,7 @@ async def run_autonomous(
 
     # Check if first run (no task file exists in this session)
     is_first_run = not get_tasks_file().exists()
+    initializer_attempts = 0
 
     if is_first_run:
         logger.info("=" * 60)
@@ -63,26 +77,46 @@ async def run_autonomous(
     while True:
         iteration += 1
 
+        # Check abort signal
+        if abort_check and abort_check():
+            logger.info("Abort signaled. Stopping.")
+            yield AutonomousEvent(event_type="complete", iteration=iteration)
+            return
+
         # Check iteration limit
         if max_iterations and iteration > max_iterations:
             logger.info(f"Reached max iterations ({max_iterations}). Stopping.")
-            break
+            yield AutonomousEvent(event_type="complete", iteration=iteration)
+            return
 
         # Check if all tasks complete
         if not is_first_run and all_tasks_complete():
             print_final_summary()
-            break
+            yield AutonomousEvent(event_type="complete", iteration=iteration)
+            return
+
+        phase = "initializer" if is_first_run else "worker"
+        prompt_name = phase
+
+        # Yield task header event
+        yield AutonomousEvent(
+            event_type="task_header",
+            iteration=iteration,
+            phase=phase,
+            task_name=f"Session {iteration} ({prompt_name})",
+        )
+
+        import mlflow
 
         # Track each iteration as a sub-span
         with mlflow.start_span(name=f"session_{iteration}") as iter_span:
             iter_span.set_attribute("iteration", iteration)
-            iter_span.set_attribute("phase", "initializer" if is_first_run else "worker")
+            iter_span.set_attribute("phase", phase)
 
             # Fresh agent per session (Anthropic pattern)
             agent = MLflowAgent(config)
 
             # Choose prompt based on state
-            prompt_name = "initializer" if is_first_run else "worker"
             prompt = load_prompt(prompt_name)
             prompt = prompt.replace("{experiment_id}", experiment_id)
             prompt = prompt.replace("{session_dir}", str(session_dir))
@@ -98,9 +132,18 @@ async def run_autonomous(
             # Run session and stream output
             try:
                 async for result in agent.query(prompt):
-                    if result.event_type == "text":
-                        # Print incremental text (clear line and reprint for streaming effect)
-                        pass  # Text is accumulated in result.response
+                    # Check abort between agent results
+                    if abort_check and abort_check():
+                        logger.info("Abort signaled during session.")
+                        yield AutonomousEvent(event_type="complete", iteration=iteration)
+                        return
+
+                    yield AutonomousEvent(
+                        event_type="agent_result",
+                        iteration=iteration,
+                        phase=phase,
+                        agent_result=result,
+                    )
 
                 # Log final response
                 if result and result.response:
@@ -136,23 +179,59 @@ async def run_autonomous(
             except KeyboardInterrupt:
                 iter_span.set_attribute("status", "interrupted")
                 logger.info("Interrupted by user.")
-                break
+                yield AutonomousEvent(event_type="complete", iteration=iteration)
+                return
             except Exception as e:
                 iter_span.set_attribute("error", str(e))
                 logger.error(f"Error in session: {e}")
                 logger.exception("Session error")
+                yield AutonomousEvent(
+                    event_type="error",
+                    iteration=iteration,
+                    error_message=str(e),
+                )
 
             # After session completes, transition from initializer to worker
             if is_first_run:
                 tasks_file = get_tasks_file()
+                # Fallback: check if agent wrote to state/ directory via save_findings
+                if not tasks_file.exists():
+                    state_tasks = session_dir / "state" / "eval_tasks.json"
+                    if state_tasks.exists():
+                        import shutil
+                        shutil.move(str(state_tasks), str(tasks_file))
+                        logger.info(f"Moved task file from {state_tasks} to {tasks_file}")
                 if tasks_file.exists():
                     is_first_run = False
-                    logger.info("✓ Initializer session complete. Switching to worker mode.")
+                    logger.info("Initializer complete. Switching to worker mode.")
                 else:
-                    logger.warning("⚠ Initializer did not create task file. Will retry initializer session.")
+                    initializer_attempts += 1
+                    if initializer_attempts >= MAX_INITIALIZER_ATTEMPTS:
+                        logger.error(f"Initializer failed after {MAX_INITIALIZER_ATTEMPTS} attempts.")
+                        yield AutonomousEvent(
+                            event_type="error",
+                            iteration=iteration,
+                            error_message=f"Initializer failed to create task file after {MAX_INITIALIZER_ATTEMPTS} attempts.",
+                        )
+                        return
+                    logger.warning(
+                        f"Initializer did not create task file "
+                        f"(attempt {initializer_attempts}/{MAX_INITIALIZER_ATTEMPTS})."
+                    )
 
         # Progress summary
         print_progress_summary()
+
+        # Yield progress event
+        yield AutonomousEvent(
+            event_type="progress",
+            iteration=iteration,
+            phase=phase,
+            progress_data={
+                "is_first_run": is_first_run,
+                "session_id": config.session_id,
+            },
+        )
 
         # Auto-continue with interrupt window
         runtime = detect_runtime()
@@ -166,4 +245,27 @@ async def run_autonomous(
             await asyncio.sleep(AUTO_CONTINUE_DELAY_SECONDS)
         except KeyboardInterrupt:
             logger.info("Stopped by user.")
-            break
+            yield AutonomousEvent(event_type="complete", iteration=iteration)
+            return
+
+
+async def run_autonomous(
+    experiment_id: str,
+    max_iterations: Optional[int] = None,
+) -> None:
+    """Run autonomous evaluation loop with task tracking.
+
+    Args:
+        experiment_id: MLflow experiment ID to analyze
+        max_iterations: Maximum iterations (None = until complete)
+    """
+    import mlflow
+
+    with mlflow.start_span(name="autonomous_evaluation", span_type="AGENT"):
+        async for event in stream_autonomous(experiment_id, max_iterations):
+            if event.event_type == "agent_result" and event.agent_result:
+                result = event.agent_result
+                if result.event_type == "text" and result.response:
+                    pass  # Text accumulated
+            elif event.event_type == "complete":
+                break

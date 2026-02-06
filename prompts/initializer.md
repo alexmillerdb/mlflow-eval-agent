@@ -95,16 +95,18 @@ Choose scorers based on what you can evaluate:
 
 ## Phase 2: Create Task Plan
 
-Write `{session_dir}/eval_tasks.json` with ordered tasks:
+Use `save_findings` with key `eval_tasks` to create the task plan. This writes to `{session_dir}/eval_tasks.json` (the correct location for the autonomous loop to detect).
 
 ```json
-[
+{"key": "eval_tasks", "data": [
   {"id": 1, "name": "Build evaluation dataset", "type": "dataset", "status": "pending", "details": "..."},
   {"id": 2, "name": "Create scorers", "type": "scorer", "status": "pending", "details": "..."},
   {"id": 3, "name": "Generate eval script", "type": "script", "status": "pending", "details": "..."},
   {"id": 4, "name": "Run and validate", "type": "validate", "status": "pending", "details": "..."}
-]
+]}
 ```
+
+**IMPORTANT:** Do NOT use `Write` to create the task file directly. Use `save_findings` with key `eval_tasks` so it goes to the correct path.
 
 Customize the `details` field based on your trace analysis:
 - For `dataset`: List specific trace IDs to extract, input patterns to cover
@@ -153,8 +155,8 @@ Save findings to `{session_dir}/state/analysis.json`:
 ## Output Checklist
 
 Before ending this session, verify you have created:
-- [ ] `{session_dir}/eval_tasks.json` - Task list for worker sessions
-- [ ] `{session_dir}/state/analysis.json` - Initial trace analysis
+- [ ] `{session_dir}/eval_tasks.json` - via `save_findings` with key `eval_tasks`
+- [ ] `{session_dir}/state/analysis.json` - via `save_findings` with key `analysis`
 
 ## Tools Available
 

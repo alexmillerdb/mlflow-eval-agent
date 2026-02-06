@@ -246,6 +246,13 @@ def create_tools(user_token: Optional[str] = None) -> list:
                 except json.JSONDecodeError:
                     pass  # Keep as string if not valid JSON
 
+            # Special-case: eval_tasks writes to session root, not state/
+            if key == "eval_tasks":
+                path = mlflow_ops.save_tasks(data)
+                result = mlflow_ops.text_result(f"[State] Tasks saved to {path}")
+                record_tool_call("save_findings", len(str(args)), len(str(result)))
+                return result
+
             path = mlflow_ops.save_state(key, data)
             result = mlflow_ops.text_result(f"[State] Saved to {path}")
             record_tool_call("save_findings", len(str(args)), len(str(result)))
@@ -497,6 +504,8 @@ class MCPTools:
 class BuiltinTools:
     """Claude SDK built-in tools."""
     READ = "Read"
+    WRITE = "Write"
+    EDIT = "Edit"
     BASH = "Bash"
     GLOB = "Glob"
     GREP = "Grep"

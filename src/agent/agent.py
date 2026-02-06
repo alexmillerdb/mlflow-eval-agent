@@ -51,8 +51,14 @@ def setup_mlflow():
 
     _mlflow.set_tracking_uri(config.tracking_uri)
     if config.agent_experiment_id:
-        _mlflow.set_experiment(experiment_id=config.agent_experiment_id)
-        logging.info(f"MLflow experiment set to: {config.agent_experiment_id}")
+        try:
+            _mlflow.set_experiment(experiment_id=config.agent_experiment_id)
+            logging.info(f"MLflow experiment set to: {config.agent_experiment_id}")
+        except Exception as e:
+            logging.warning(
+                f"Could not set agent experiment {config.agent_experiment_id}: {e}. "
+                "Agent traces will use the default experiment."
+            )
 
     mlflow_anthropic.autolog()
 
@@ -157,6 +163,8 @@ class MLflowAgent:
             allowed_tools=[
                 # Built-in Claude tools
                 BuiltinTools.READ,
+                BuiltinTools.WRITE,
+                BuiltinTools.EDIT,
                 BuiltinTools.BASH,
                 BuiltinTools.GLOB,
                 BuiltinTools.GREP,
