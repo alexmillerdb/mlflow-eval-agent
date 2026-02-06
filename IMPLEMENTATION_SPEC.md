@@ -175,14 +175,9 @@ config:
   - name: experiment_id
     description: Default MLflow experiment ID
     default: ""
-  - name: model
+  - name: anthropic_model
     description: Claude model to use
-    default: databricks-claude-sonnet-4
-
-# Resource requirements
-resources:
-  cpu: 2
-  memory: 4Gi
+    default: databricks-claude-opus-4.5
 ```
 
 ---
