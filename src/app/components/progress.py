@@ -1,6 +1,5 @@
 """Task progress display components."""
 import streamlit as st
-from src.agent.mlflow_ops import get_task_status
 
 STATUS_ICONS = {
     "pending": "⏳",
@@ -12,6 +11,8 @@ STATUS_ICONS = {
 
 def render_task_progress():
     """Display compact progress bar with metrics."""
+    from src.agent.mlflow_ops import get_task_status
+
     status = get_task_status()
     total = status["total"]
 
@@ -32,6 +33,8 @@ def render_task_progress():
 
 def render_task_list():
     """Display expandable task list with details."""
+    from src.agent.mlflow_ops import get_task_status
+
     status = get_task_status()
     tasks = status.get("tasks", [])
 

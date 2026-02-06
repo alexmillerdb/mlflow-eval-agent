@@ -1,16 +1,6 @@
 """MLflow Evaluation Agent package.
 
-Simplified architecture following Anthropic best practices:
-- Single agent with 3 tools (vs coordinator + 4 sub-agents + 11 tools)
-- File-based state (vs 787-line workspace.py)
-- External prompts (vs hardcoded)
+Import directly from submodules:
+    from src.agent.agent import MLflowAgent, AgentResult
+    from src.core.config import Config
 """
-
-from .agent.agent import MLflowAgent, AgentResult
-from .core.config import Config
-
-__all__ = [
-    "MLflowAgent",
-    "AgentResult",
-    "Config",
-]
