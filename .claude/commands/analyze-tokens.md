@@ -31,7 +31,7 @@ uv run python scripts/analyze_trace.py $ARGUMENTS --tokens
 uv run python -c "
 import asyncio
 import mlflow
-from src.agent import MLflowAgent, setup_mlflow
+from src.agent.agent import MLflowAgent, setup_mlflow
 
 setup_mlflow()
 
