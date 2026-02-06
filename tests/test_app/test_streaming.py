@@ -152,6 +152,11 @@ class TestMainLazyImports:
         from src.app.main import _refresh_panel
         assert callable(_refresh_panel)
 
+    def test_scroll_helper_imports(self):
+        """Imports used by _inject_scroll_to_bottom()."""
+        import streamlit.components.v1 as components
+        assert callable(components.html)
+
 
 # =============================================================================
 # 3. Streaming pipeline integration

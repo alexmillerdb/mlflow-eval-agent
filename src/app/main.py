@@ -17,6 +17,7 @@ if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from src.app.streaming import async_to_sync_generator
 from src.app.components import (
@@ -34,6 +35,47 @@ st.set_page_config(
     page_icon=":microscope:",
     layout="wide",
 )
+
+
+_CHAT_CONTAINER_HEIGHT = 600
+
+
+def _inject_chat_scroll_css():
+    """Inject CSS to make the chat container fill available viewport height."""
+    st.markdown(
+        """
+        <style>
+        .st-key-chat-scroll [data-testid="stVerticalBlockBorderWrapper"] > div {
+            max-height: calc(100vh - 180px) !important;
+            height: calc(100vh - 180px) !important;
+        }
+        .st-key-chat-scroll [data-testid="stVerticalBlockBorderWrapper"] {
+            border: none !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _inject_scroll_to_bottom():
+    """Inject JS to scroll the chat container to the bottom."""
+    components.html(
+        """
+        <script>
+        (function() {
+            const container = parent.document.querySelector(
+                '.st-key-chat-scroll [data-testid="stVerticalBlockBorderWrapper"] > div'
+            );
+            if (container) {
+                container.scrollTop = container.scrollHeight;
+            }
+        })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
 
 
 def initialize_session_state():
@@ -79,6 +121,12 @@ def stream_agent_response_full(prompt: str):
     # Create agent with current config + OBO token for per-user file access
     config = Config.from_env(validate=False)
     config.user_token = get_obo_token()
+
+    # Pass session directory from autonomous run for file continuity
+    auto_session_dir = st.session_state.get("auto_session_dir")
+    if auto_session_dir:
+        config.session_dir = Path(auto_session_dir)
+
     agent = MLflowAgent(config)
 
     # Capture session_id before creating closure (can't access st.session_state from worker thread)
@@ -318,13 +366,23 @@ def main():
     has_session = bool(st.session_state.get("auto_session_dir"))
     show_panel = st.session_state.get("show_file_panel", True) and (is_auto or has_session)
 
+    # Inject CSS for viewport-relative chat height
+    _inject_chat_scroll_css()
+
     if show_panel:
         col_chat, col_panel = st.columns([2, 1])
     else:
         col_chat = st.container()
         col_panel = None
 
+    # Create scrollable chat container inside the chat column
     with col_chat:
+        chat_scroll = st.container(
+            height=_CHAT_CONTAINER_HEIGHT, key="chat-scroll", border=False
+        )
+
+    # Render chat history inside the scrollable container
+    with chat_scroll:
         display_chat_history()
 
     panel_placeholder = None
@@ -341,7 +399,7 @@ def main():
         st.session_state.auto_running = True
         experiment_id = os.getenv("MLFLOW_EXPERIMENT_ID", "")
         max_iterations = st.session_state.get("auto_max_iterations", 10)
-        with col_chat:
+        with chat_scroll:
             _run_autonomous_streaming(experiment_id, max_iterations, panel_placeholder=panel_placeholder)
 
     # Chat input at page level - docks to bottom of page
@@ -350,8 +408,9 @@ def main():
         disabled=st.session_state.get("auto_running", False),
     )
     if prompt:
-        with col_chat:
+        with chat_scroll:
             handle_user_input(prompt)
+            _inject_scroll_to_bottom()
 
 
 if __name__ == "__main__":
