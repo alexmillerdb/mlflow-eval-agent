@@ -128,6 +128,11 @@ class MLflowAgent:
         self.config = config or Config.from_env()
         self._last_session_id: Optional[str] = None
 
+        # Set session directory for MCP tools if provided (e.g., from autonomous run)
+        if self.config.session_dir:
+            from .mlflow_ops import set_session_dir
+            set_session_dir(self.config.session_dir)
+
     @property
     def session_id(self) -> Optional[str]:
         """Last session ID for resumption."""
@@ -140,10 +145,36 @@ class MLflowAgent:
         Note: Detailed tool/workflow info moved to worker/initializer prompts
         and mlflow-evaluation skill to reduce token overhead.
         """
-        # Only include experiment context - no system.md (deleted for token savings)
+        parts = []
+
         if self.config.experiment_id:
-            return f"## Current Experiment\nExperiment ID: `{self.config.experiment_id}`\n"
-        return ""
+            parts.append(f"## Current Experiment\nExperiment ID: `{self.config.experiment_id}`\n")
+
+        # Include session directory context so interactive mode knows about existing files
+        if self.config.session_dir and self.config.session_dir.is_dir():
+            session_dir = self.config.session_dir
+            parts.append(f"## Session Directory\n`{session_dir}`\n")
+            parts.append(
+                "This session has existing evaluation files from a previous autonomous run. "
+                "When asked to modify evaluation code, **edit the existing files** — do NOT create new files.\n"
+            )
+
+            # List existing files in evaluation directory
+            eval_dir = session_dir / "evaluation"
+            if eval_dir.is_dir():
+                files = sorted(f for f in eval_dir.iterdir() if f.is_file())
+                if files:
+                    parts.append("### Existing Evaluation Files\n")
+                    for f in files:
+                        parts.append(f"- `{f}`")
+                    parts.append("")
+                    parts.append(
+                        "To modify these files, use the **Edit** tool (for targeted changes) "
+                        "or **Read** then **Write** (for larger rewrites). "
+                        "Do NOT create new files with different names.\n"
+                    )
+
+        return "\n".join(parts)
 
     @mlflow.trace
     def _build_options(self, session_id: Optional[str] = None) -> ClaudeAgentOptions:

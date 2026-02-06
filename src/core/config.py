@@ -40,6 +40,9 @@ class Config:
     # OBO token (set by Streamlit app, not from env vars)
     user_token: Optional[str] = None
 
+    # Session directory (set by autonomous mode, passed to interactive for file continuity)
+    session_dir: Optional[Path] = None
+
     @classmethod
     def from_env(cls, validate: bool = True) -> "Config":
         """Load configuration from environment variables."""
