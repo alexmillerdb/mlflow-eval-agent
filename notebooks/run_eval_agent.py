@@ -44,7 +44,7 @@ import subprocess
 import sys
 
 try:
-    from src.agent import MLflowAgent
+    from src.agent.agent import MLflowAgent
     print("Package already installed (job environment)")
 except ImportError:
     print("Package not found, installing from Volume...")
@@ -110,7 +110,8 @@ print(f"Anthropic base URL: {os.environ['ANTHROPIC_BASE_URL']}")
 # COMMAND ----------
 
 # Import and initialize
-from src.agent import setup_mlflow, run_autonomous
+from src.agent.agent import setup_mlflow
+from src.agent.autonomous import run_autonomous
 from src.core.config import Config
 
 # Enable tracing + autolog (MLflow notebook integration shows traces automatically)
