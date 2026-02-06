@@ -70,7 +70,7 @@ def _format_size(size_bytes: int) -> str:
 
 
 def render_file_viewer(session_dir: Path) -> None:
-    """Render a tabbed file viewer for session artifacts.
+    """Render an expander-based file viewer for session artifacts.
 
     Args:
         session_dir: Path to the agent session directory.
@@ -79,20 +79,18 @@ def render_file_viewer(session_dir: Path) -> None:
         st.info("No session directory available. Run the agent to generate files.")
         return
 
-    if st.button("🔄 Refresh Files"):
-        st.rerun()
-
     files = _discover_files(session_dir)
 
     if not files:
         st.info(f"No files found in {session_dir}")
         return
 
-    tab_names = list(files.keys())
-    tabs = st.tabs(tab_names)
+    # Find most recently modified file to auto-expand
+    newest_file = max(files.keys(), key=lambda n: files[n].stat().st_mtime)
 
-    for tab, (name, path) in zip(tabs, files.items()):
-        with tab:
+    for name, path in files.items():
+        is_newest = (name == newest_file)
+        with st.expander(f"📄 {name}", expanded=is_newest):
             size = path.stat().st_size
             st.caption(f"{_format_size(size)}")
 

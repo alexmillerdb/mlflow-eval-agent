@@ -10,7 +10,7 @@ Tests are organized in three tiers:
 
 import asyncio
 import inspect
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -146,6 +146,11 @@ class TestMainLazyImports:
         assert callable(render_task_progress)
         assert callable(render_task_list)
         assert callable(render_file_viewer)
+
+    def test_refresh_panel_import(self):
+        """_refresh_panel is importable from main."""
+        from src.app.main import _refresh_panel
+        assert callable(_refresh_panel)
 
 
 # =============================================================================
@@ -361,7 +366,7 @@ class TestUnifiedMessageHistory:
     @patch("src.app.main.st")
     @patch("src.app.main.ChatRenderer")
     def test_display_autonomous_message(self, mock_renderer_cls, mock_st):
-        """Autonomous message renders with gear avatar and iteration header."""
+        """Autonomous message renders as collapsible expander, latest expanded."""
         from src.app.main import display_chat_history
 
         parts = [{"type": "text", "content": "Analysis"}]
@@ -372,14 +377,52 @@ class TestUnifiedMessageHistory:
             "parts": parts,
         }]
         mock_ctx = MagicMock()
-        mock_st.chat_message.return_value.__enter__ = MagicMock(return_value=mock_ctx)
-        mock_st.chat_message.return_value.__exit__ = MagicMock(return_value=False)
+        mock_st.expander.return_value.__enter__ = MagicMock(return_value=mock_ctx)
+        mock_st.expander.return_value.__exit__ = MagicMock(return_value=False)
 
         display_chat_history()
 
-        mock_st.chat_message.assert_called_with("assistant", avatar="\U0001f527")
-        mock_st.markdown.assert_called_with("**Session 1** (initializer)")
+        mock_st.expander.assert_called_with(
+            "Session 1 \u2014 Initializer",
+            expanded=True,
+        )
         mock_renderer_cls.render_history_message.assert_called_once_with(parts)
+
+    @patch("src.app.main.st")
+    @patch("src.app.main.ChatRenderer")
+    def test_display_multiple_autonomous_first_collapsed(self, mock_renderer_cls, mock_st):
+        """First of two autonomous sessions is collapsed, second expanded."""
+        from src.app.main import display_chat_history
+
+        parts = [{"type": "text", "content": "Analysis"}]
+        mock_st.session_state.messages = [
+            {
+                "role": "autonomous",
+                "iteration": 1,
+                "phase": "initializer",
+                "parts": parts,
+            },
+            {
+                "role": "autonomous",
+                "iteration": 2,
+                "phase": "worker",
+                "parts": parts,
+            },
+        ]
+        mock_expander = MagicMock()
+        mock_expander.__enter__ = MagicMock(return_value=mock_expander)
+        mock_expander.__exit__ = MagicMock(return_value=False)
+        mock_st.expander.return_value = mock_expander
+
+        display_chat_history()
+
+        # Should have been called twice
+        calls = mock_st.expander.call_args_list
+        assert len(calls) == 2
+        # First session: collapsed
+        assert calls[0] == call("Session 1 — Initializer", expanded=False)
+        # Second session: expanded (latest)
+        assert calls[1] == call("Session 2 — Worker", expanded=True)
 
     @patch("src.app.main.st")
     @patch("src.app.main.ChatRenderer")

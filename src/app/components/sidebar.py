@@ -83,6 +83,10 @@ def render_sidebar():
                     if hasattr(st.session_state, "_abort_event"):
                         st.session_state._abort_event.set()
 
+        # Show file panel toggle when in autonomous mode or when session files exist from previous run
+        if st.session_state.get("mode", "interactive") == "autonomous" or st.session_state.get("auto_session_dir"):
+            st.checkbox("Show File Panel", key="show_file_panel")
+
         st.divider()
 
         # Session controls

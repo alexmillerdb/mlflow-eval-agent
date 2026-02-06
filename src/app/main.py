@@ -54,6 +54,8 @@ def initialize_session_state():
         st.session_state.mode = "interactive"
     if "auto_start_requested" not in st.session_state:
         st.session_state.auto_start_requested = False
+    if "show_file_panel" not in st.session_state:
+        st.session_state.show_file_panel = True
 
 
 def stream_agent_response_full(prompt: str):
@@ -98,16 +100,27 @@ def stream_agent_response_full(prompt: str):
 
 
 def display_chat_history():
-    """Display existing chat messages with full tool expanders."""
-    for message in st.session_state.messages:
+    """Display existing chat messages with collapsible autonomous sessions."""
+    messages = st.session_state.messages
+
+    # Pre-compute the last autonomous message index for expand logic
+    last_autonomous_idx = max(
+        (i for i, m in enumerate(messages) if m.get("role") == "autonomous"),
+        default=-1,
+    )
+
+    for idx, message in enumerate(messages):
         role = message.get("role", "user")
 
         if role == "autonomous":
-            # Autonomous iteration message — show with gear avatar and header
+            # Autonomous iteration — collapsible expander, latest expanded
             iteration = message.get("iteration", "?")
             phase = message.get("phase", "worker")
-            with st.chat_message("assistant", avatar="\U0001f527"):
-                st.markdown(f"**Session {iteration}** ({phase})")
+            is_latest = (idx == last_autonomous_idx)
+            with st.expander(
+                f"Session {iteration} — {phase.title()}",
+                expanded=is_latest,
+            ):
                 if "parts" in message:
                     ChatRenderer.render_history_message(message["parts"])
 
@@ -149,9 +162,14 @@ def handle_user_input(prompt: str):
     # Store structured assistant response in history
     st.session_state.messages.append({"role": "assistant", "parts": parts})
 
+    # Refresh panel if visible (files may have been modified by assistant)
+    panel_placeholder = st.session_state.get("_panel_placeholder")
+    if panel_placeholder and st.session_state.get("auto_session_dir"):
+        _refresh_panel(panel_placeholder)
 
 
-def _run_autonomous_streaming(experiment_id: str, max_iterations: int):
+
+def _run_autonomous_streaming(experiment_id: str, max_iterations: int, panel_placeholder=None):
     """Run autonomous evaluation with streaming output to the UI."""
     from src.agent.autonomous import stream_autonomous
 
@@ -173,15 +191,20 @@ def _run_autonomous_streaming(experiment_id: str, max_iterations: int):
             # Track session directory from first event
             if event.iteration == 1 and st.session_state.auto_session_dir is None:
                 _try_detect_session_dir()
+                _refresh_panel(panel_placeholder)
 
-            # Render task header
+            # Render task header as collapsible expander
             phase_label = event.phase or "worker"
-            st.markdown(f"---\n### Session {event.iteration} ({phase_label})")
             current_iteration = event.iteration
+            session_expander = st.expander(
+                f"Session {event.iteration} — {phase_label.title()}",
+                expanded=True,
+            )
 
-            # Render all agent results for this iteration with a single ChatRenderer
-            renderer = ChatRenderer()
-            parts = renderer.render(_agent_results_until_boundary(events))
+            # Render all agent results inside the expander
+            with session_expander:
+                renderer = ChatRenderer()
+                parts = renderer.render(_agent_results_until_boundary(events))
             last_event = _agent_results_until_boundary.last_event
 
             # Store iteration in unified message list
@@ -192,11 +215,13 @@ def _run_autonomous_streaming(experiment_id: str, max_iterations: int):
                     "phase": phase_label,
                     "parts": parts,
                 })
+                _refresh_panel(panel_placeholder)
 
             # Handle the boundary event that ended the iteration
             if last_event:
                 if last_event.event_type == "progress":
                     _try_detect_session_dir()
+                    _refresh_panel(panel_placeholder)
                 elif last_event.event_type == "error":
                     error_msg = f"Error in session {last_event.iteration}: {last_event.error_message}"
                     st.error(error_msg)
@@ -206,6 +231,7 @@ def _run_autonomous_streaming(experiment_id: str, max_iterations: int):
                         "content": error_msg,
                     })
                 elif last_event.event_type == "complete":
+                    _refresh_panel(panel_placeholder)
                     break
 
         elif event.event_type == "progress":
@@ -226,6 +252,7 @@ def _run_autonomous_streaming(experiment_id: str, max_iterations: int):
     st.session_state.auto_running = False
     st.session_state.abort_requested = False
     st.success("Autonomous run complete!")
+    _refresh_panel(panel_placeholder)
     st.session_state.messages.append({
         "role": "auto_status",
         "status": "complete",
@@ -263,10 +290,20 @@ def _render_side_panel():
     session_dir = st.session_state.auto_session_dir
     if session_dir:
         render_file_viewer(Path(session_dir))
-    st.divider()
-    render_task_progress()
-    with st.expander("Task Details"):
-        render_task_list()
+        st.divider()
+        render_task_progress()
+        with st.expander("Task Details"):
+            render_task_list()
+    else:
+        st.caption("Waiting for session to start...")
+
+
+def _refresh_panel(panel_placeholder):
+    """Re-render the side panel in its placeholder for live updates."""
+    if panel_placeholder is None:
+        return
+    with panel_placeholder.container():
+        _render_side_panel()
 
 
 def main():
@@ -278,7 +315,8 @@ def main():
 
     mode = st.session_state.get("mode", "interactive")
     is_auto = mode == "autonomous"
-    show_panel = is_auto and st.session_state.get("auto_session_dir")
+    has_session = bool(st.session_state.get("auto_session_dir"))
+    show_panel = st.session_state.get("show_file_panel", True) and (is_auto or has_session)
 
     if show_panel:
         col_chat, col_panel = st.columns([2, 1])
@@ -289,9 +327,13 @@ def main():
     with col_chat:
         display_chat_history()
 
+    panel_placeholder = None
     if col_panel is not None:
         with col_panel:
-            _render_side_panel()
+            panel_placeholder = st.empty()
+            with panel_placeholder.container():
+                _render_side_panel()
+    st.session_state._panel_placeholder = panel_placeholder
 
     # Handle autonomous start (flag set by sidebar button)
     if st.session_state.get("auto_start_requested"):
@@ -300,7 +342,7 @@ def main():
         experiment_id = os.getenv("MLFLOW_EXPERIMENT_ID", "")
         max_iterations = st.session_state.get("auto_max_iterations", 10)
         with col_chat:
-            _run_autonomous_streaming(experiment_id, max_iterations)
+            _run_autonomous_streaming(experiment_id, max_iterations, panel_placeholder=panel_placeholder)
 
     # Chat input at page level - docks to bottom of page
     prompt = st.chat_input(
