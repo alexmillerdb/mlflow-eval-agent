@@ -46,12 +46,14 @@ def initialize_session_state():
         st.session_state.initialized = False
     if "auto_running" not in st.session_state:
         st.session_state.auto_running = False
-    if "auto_messages" not in st.session_state:
-        st.session_state.auto_messages = []
     if "auto_session_dir" not in st.session_state:
         st.session_state.auto_session_dir = None
     if "abort_requested" not in st.session_state:
         st.session_state.abort_requested = False
+    if "mode" not in st.session_state:
+        st.session_state.mode = "interactive"
+    if "auto_start_requested" not in st.session_state:
+        st.session_state.auto_start_requested = False
 
 
 def stream_agent_response_full(prompt: str):
@@ -98,13 +100,32 @@ def stream_agent_response_full(prompt: str):
 def display_chat_history():
     """Display existing chat messages with full tool expanders."""
     for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            if "parts" in message:
-                # Structured message format with tool expanders
-                ChatRenderer.render_history_message(message["parts"])
+        role = message.get("role", "user")
+
+        if role == "autonomous":
+            # Autonomous iteration message — show with gear avatar and header
+            iteration = message.get("iteration", "?")
+            phase = message.get("phase", "worker")
+            with st.chat_message("assistant", avatar="\U0001f527"):
+                st.markdown(f"**Session {iteration}** ({phase})")
+                if "parts" in message:
+                    ChatRenderer.render_history_message(message["parts"])
+
+        elif role == "auto_status":
+            # Status message from autonomous run
+            status = message.get("status", "")
+            content = message.get("content", "")
+            if status == "error":
+                st.error(content)
             else:
-                # Legacy format (plain text content)
-                st.markdown(message.get("content", ""))
+                st.success(content)
+
+        elif role in ("user", "assistant"):
+            with st.chat_message(role):
+                if "parts" in message:
+                    ChatRenderer.render_history_message(message["parts"])
+                else:
+                    st.markdown(message.get("content", ""))
 
 
 def handle_user_input(prompt: str):
@@ -128,67 +149,6 @@ def handle_user_input(prompt: str):
     # Store structured assistant response in history
     st.session_state.messages.append({"role": "assistant", "parts": parts})
 
-
-def render_autonomous_tab():
-    """Render autonomous evaluation mode controls with streaming output."""
-    st.subheader("Autonomous Evaluation")
-
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        auto_exp_id = st.text_input(
-            "Experiment ID",
-            value=os.getenv("MLFLOW_EXPERIMENT_ID", ""),
-            key="auto_exp_id",
-        )
-    with col2:
-        max_iterations = st.number_input(
-            "Max Iterations",
-            min_value=1,
-            max_value=50,
-            value=10,
-            key="max_iterations",
-        )
-
-    btn_col1, btn_col2 = st.columns([1, 1])
-    with btn_col1:
-        start_clicked = st.button("Start Autonomous Run", type="primary")
-    with btn_col2:
-        if st.session_state.auto_running:
-            if st.button("Stop"):
-                st.session_state.abort_requested = True
-                if hasattr(st.session_state, '_abort_event'):
-                    st.session_state._abort_event.set()
-
-    if start_clicked:
-        if not auto_exp_id:
-            st.error("Please enter an Experiment ID")
-            return
-
-        os.environ["MLFLOW_EXPERIMENT_ID"] = auto_exp_id
-        st.session_state.auto_running = True
-        st.session_state.abort_requested = False
-        st.session_state.auto_messages = []
-        _run_autonomous_streaming(auto_exp_id, max_iterations)
-
-    st.divider()
-
-    # Split layout: chat output left, file viewer right
-    col_chat, col_files = st.columns([2, 1])
-
-    with col_chat:
-        _display_autonomous_history()
-
-    with col_files:
-        session_dir = st.session_state.auto_session_dir
-        if session_dir:
-            render_file_viewer(Path(session_dir))
-        else:
-            st.info("Files will appear here during an autonomous run.")
-
-    # Progress display at bottom
-    render_task_progress()
-    with st.expander("Task Details"):
-        render_task_list()
 
 
 def _run_autonomous_streaming(experiment_id: str, max_iterations: int):
@@ -224,10 +184,12 @@ def _run_autonomous_streaming(experiment_id: str, max_iterations: int):
             parts = renderer.render(_agent_results_until_boundary(events))
             last_event = _agent_results_until_boundary.last_event
 
-            # Store iteration
+            # Store iteration in unified message list
             if parts:
-                st.session_state.auto_messages.append({
+                st.session_state.messages.append({
+                    "role": "autonomous",
                     "iteration": current_iteration,
+                    "phase": phase_label,
                     "parts": parts,
                 })
 
@@ -236,7 +198,13 @@ def _run_autonomous_streaming(experiment_id: str, max_iterations: int):
                 if last_event.event_type == "progress":
                     _try_detect_session_dir()
                 elif last_event.event_type == "error":
-                    st.error(f"Error in session {last_event.iteration}: {last_event.error_message}")
+                    error_msg = f"Error in session {last_event.iteration}: {last_event.error_message}"
+                    st.error(error_msg)
+                    st.session_state.messages.append({
+                        "role": "auto_status",
+                        "status": "error",
+                        "content": error_msg,
+                    })
                 elif last_event.event_type == "complete":
                     break
 
@@ -244,7 +212,13 @@ def _run_autonomous_streaming(experiment_id: str, max_iterations: int):
             _try_detect_session_dir()
 
         elif event.event_type == "error":
-            st.error(f"Error in session {event.iteration}: {event.error_message}")
+            error_msg = f"Error in session {event.iteration}: {event.error_message}"
+            st.error(error_msg)
+            st.session_state.messages.append({
+                "role": "auto_status",
+                "status": "error",
+                "content": error_msg,
+            })
 
         elif event.event_type == "complete":
             break
@@ -252,6 +226,11 @@ def _run_autonomous_streaming(experiment_id: str, max_iterations: int):
     st.session_state.auto_running = False
     st.session_state.abort_requested = False
     st.success("Autonomous run complete!")
+    st.session_state.messages.append({
+        "role": "auto_status",
+        "status": "complete",
+        "content": "Autonomous run complete!",
+    })
 
 
 def _agent_results_until_boundary(events_iter):
@@ -279,13 +258,15 @@ def _try_detect_session_dir():
         pass
 
 
-def _display_autonomous_history():
-    """Display previously streamed autonomous messages."""
-    for msg in st.session_state.auto_messages:
-        iteration = msg.get("iteration", "?")
-        parts = msg.get("parts", [])
-        st.markdown(f"---\n### Session {iteration}")
-        ChatRenderer.render_history_message(parts)
+def _render_side_panel():
+    """Render file viewer and task progress in the autonomous side panel."""
+    session_dir = st.session_state.auto_session_dir
+    if session_dir:
+        render_file_viewer(Path(session_dir))
+    st.divider()
+    render_task_progress()
+    with st.expander("Task Details"):
+        render_task_list()
 
 
 def main():
@@ -295,18 +276,39 @@ def main():
     initialize_session_state()
     render_sidebar()
 
-    tab1, tab2 = st.tabs(["Interactive", "Autonomous"])
+    mode = st.session_state.get("mode", "interactive")
+    is_auto = mode == "autonomous"
+    show_panel = is_auto and st.session_state.get("auto_session_dir")
 
-    with tab1:
+    if show_panel:
+        col_chat, col_panel = st.columns([2, 1])
+    else:
+        col_chat = st.container()
+        col_panel = None
+
+    with col_chat:
         display_chat_history()
 
-    with tab2:
-        render_autonomous_tab()
+    if col_panel is not None:
+        with col_panel:
+            _render_side_panel()
+
+    # Handle autonomous start (flag set by sidebar button)
+    if st.session_state.get("auto_start_requested"):
+        st.session_state.auto_start_requested = False
+        st.session_state.auto_running = True
+        experiment_id = os.getenv("MLFLOW_EXPERIMENT_ID", "")
+        max_iterations = st.session_state.get("auto_max_iterations", 10)
+        with col_chat:
+            _run_autonomous_streaming(experiment_id, max_iterations)
 
     # Chat input at page level - docks to bottom of page
-    prompt = st.chat_input("Ask about your MLflow traces...")
+    prompt = st.chat_input(
+        "Ask about your MLflow traces...",
+        disabled=st.session_state.get("auto_running", False),
+    )
     if prompt:
-        with tab1:
+        with col_chat:
             handle_user_input(prompt)
 
 
