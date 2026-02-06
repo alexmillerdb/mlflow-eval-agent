@@ -144,41 +144,54 @@ Full-featured Streamlit UI with tabbed interface (Interactive/Autonomous modes),
 
 **Create `app.yaml`**:
 ```yaml
-# Databricks App Configuration
-# https://docs.databricks.com/dev-tools/databricks-apps/
+# Databricks App Runtime Configuration
+# https://docs.databricks.com/dev-tools/databricks-apps/app-runtime
+# Valid top-level keys: command, env
 
-name: mlflow-eval-agent
-description: Interactive MLflow trace analysis and evaluation agent
-
-# Entry point command
 command:
   - streamlit
   - run
   - src/app/main.py
+  - --server.port
+  - "8000"
+  - --server.address
+  - "0.0.0.0"
 
-# Environment variables
 env:
+  # MLflow tracking (auto-discovered by Databricks SDK)
   - name: MLFLOW_TRACKING_URI
-    value: databricks
-  - name: MLFLOW_AGENT_VOLUME_PATH
-    valueFrom:
-      config: volume_path
-  - name: ANTHROPIC_MODEL
-    valueFrom:
-      config: model
+    value: "databricks"
 
-# App-level configuration (set at deploy time)
-config:
-  - name: volume_path
-    description: Unity Catalog Volume path for session storage
-    default: /Volumes/users/default/mlflow-eval-agent
-  - name: experiment_id
-    description: Default MLflow experiment ID
-    default: ""
-  - name: anthropic_model
-    description: Claude model to use
-    default: databricks-claude-opus-4.5
+  # Target experiment (from experiment resource binding in databricks.yml)
+  - name: MLFLOW_EXPERIMENT_ID
+    valueFrom: "experiment-binding"
+
+  # Agent's own traces experiment
+  - name: MLFLOW_AGENT_EXPERIMENT_ID
+    value: "${var.mlflow_agent_experiment_id}"
+
+  # UC Volume path for session storage
+  - name: MLFLOW_AGENT_VOLUME_PATH
+    value: "${var.volume_path}"
+
+  # Anthropic FM API config (served via Databricks endpoint)
+  - name: ANTHROPIC_MODEL
+    value: "${var.anthropic_model}"
+  - name: ANTHROPIC_API_KEY
+    value: ""
+  - name: ANTHROPIC_AUTH_TOKEN
+    valueFrom: "secrets-binding"
+  - name: ANTHROPIC_BASE_URL
+    value: "${var.anthropic_endpoint}"
+  - name: ANTHROPIC_CUSTOM_HEADERS
+    value: "x-databricks-use-coding-agent-mode: true"
 ```
+
+**Notes on `app.yaml` schema**:
+- Only `command` and `env` are valid top-level keys (no `config` section)
+- `valueFrom` references a resource binding name from `databricks.yml` (not `config`)
+- Databricks Apps auto-inject `DATABRICKS_CLIENT_ID`/`DATABRICKS_CLIENT_SECRET` for the app's service principal; the Databricks SDK auto-discovers these for MLflow, UC, etc.
+- `ANTHROPIC_AUTH_TOKEN` is a PAT from a secret scope, used by `src/core/auth.py` to authenticate with the Anthropic FM API endpoint
 
 ---
 
@@ -191,21 +204,231 @@ config:
 **Update `databricks.yml`** - Add under resources:
 ```yaml
 resources:
-  # Existing jobs section...
+  # ... existing jobs section ...
 
   apps:
     eval_agent_app:
-      name: "[${bundle.target}] MLflow Eval Agent App"
+      name: "mlflow-eval-agent"
       description: "Streamlit UI for MLflow trace analysis and evaluation"
       source_code_path: .
-      config:
-        - name: volume_path
-          value: "${var.volume_path}"
-        - name: experiment_id
-          value: "${var.experiment_id}"
-        - name: model
-          value: "${var.anthropic_model}"
+
+      # Resource bindings grant the app's service principal access
+      # and make values available to app.yaml via valueFrom
+      resources:
+        # Secret scope: Databricks PAT for Anthropic FM API auth
+        - name: "secrets-binding"
+          secret:
+            scope: "${var.secret_scope}"
+            key: "databricks-token"
+            permission: "READ"
+
+        # UC Volume: Session storage
+        - name: "uc-volume-binding"
+          uc_securable:
+            securable_full_name: "users.alex_miller.mlflow-eval-agent"
+            securable_type: "VOLUME"
+            permission: "WRITE_VOLUME"
+
+        # MLflow experiment: Target experiment to analyze
+        - name: "experiment-binding"
+          # Grants the SP read access to the experiment
 ```
+
+**Supported resource binding types** (for reference):
+
+| Type | Binding Field | Example Use |
+|------|---------------|-------------|
+| Secret | `secret: {scope, key, permission}` | PAT for FM API auth |
+| UC Volume | `uc_securable: {securable_full_name, securable_type, permission}` | Session storage |
+| Serving Endpoint | `serving_endpoint: {id, permission}` | Model serving |
+| SQL Warehouse | `sql_warehouse: {id, permission}` | SQL queries |
+| Job | `job: {id, permission}` | Job triggering |
+
+**Auth flow**: The app's service principal gets `DATABRICKS_CLIENT_ID`/`DATABRICKS_CLIENT_SECRET` auto-injected. Resource bindings grant the SP additional permissions (secret read, volume write, experiment access). The `valueFrom` in `app.yaml` resolves secret values at runtime.
+
+---
+
+### Feature 5.2.1: Apps Storage Architecture (Local-First + Volume Sync)
+
+**Status**: ⬜ Not Started
+
+**Problem**: UC Volumes have no FUSE mount in Databricks Apps. `Path("/Volumes/...").write_text()` works on clusters and jobs (FUSE-mounted), but **fails in Apps** because `/Volumes/` doesn't exist on the local filesystem. The Files API (`src/core/files.py`) is the only way to access Volumes from Apps.
+
+| Environment | `/Volumes/` access | `Path.write_text()` on Volume path |
+|---|---|---|
+| Clusters/Notebooks | FUSE mount | Works |
+| Databricks Jobs | FUSE mount | Works |
+| **Databricks Apps** | **Files API only** | **FAILS** |
+
+**Solution**: Local-first writes with Volume sync at session boundaries. The agent writes session state to a local temp directory (fast, always works), then syncs to UC Volume via Files API at key checkpoints (durable, survives restarts).
+
+- `MLFLOW_AGENT_VOLUME_PATH` controls the **sync destination**, not the working directory
+- Session ID format changes from `"app-{app_name}"` (shared across users/runs) to `"app-{YYYYMMDD_HHMMSS}"` (unique per run)
+- Local filesystem is writable but ephemeral — files vanish on app restart/redeployment
+- Sync uses existing `uc_volume_write`/`uc_volume_read` from `src/core/files.py`
+
+**Code changes required** (4 files):
+
+**1. `src/core/runtime.py` — `get_sessions_base_path()`**
+
+In APP mode, return a local temp path instead of the Volume path. The Volume path is used only for sync, not as the working directory.
+
+```python
+# Current (broken in Apps):
+#   if volume_path:
+#       base = Path(volume_path) / "sessions"  # FAILS — no FUSE mount
+#
+# Fixed:
+#   if runtime.context == RuntimeContext.DATABRICKS_APP:
+#       base = Path("/tmp/eval-agent/sessions")  # Local, always writable
+#   elif volume_path:
+#       base = Path(volume_path) / "sessions"    # FUSE mount (Jobs/clusters)
+```
+
+**2. `src/core/config.py` — Session ID generation**
+
+Change APP session prefix from `"app-{app_name}"` (collision risk — shared across concurrent users) to timestamp-based `"app-{YYYYMMDD_HHMMSS}"` (unique per run).
+
+```python
+# In RuntimeInfo.session_prefix:
+#   Current: return f"app-{self.app_name}"
+#   Fixed:   return ""  (falls through to timestamp generation in Config.from_env)
+#
+# This makes APP mode use the same datetime.now().strftime("%Y-%m-%d_%H%M%S")
+# logic as LOCAL mode, but with an "app-" prefix added in Config.from_env.
+```
+
+**3. `src/agent/mlflow_ops.py` — Add sync functions**
+
+Add two functions that use the Files API to sync session state to/from UC Volume:
+
+```python
+def sync_session_to_volume(session_dir: Path, volume_path: str) -> None:
+    """Sync local session directory to UC Volume via Files API.
+
+    Walks session_dir and writes each file to the corresponding
+    Volume path using uc_volume_write(). Called after each iteration.
+    """
+    ...
+
+def restore_session_from_volume(session_id: str, volume_path: str, local_base: Path) -> Optional[Path]:
+    """Restore a session from UC Volume to local filesystem.
+
+    Uses uc_volume_read() + uc_volume_list() to download session files.
+    Called on startup to resume interrupted sessions.
+    Returns the local session_dir if restored, None if not found.
+    """
+    ...
+```
+
+**4. `src/agent/autonomous.py` — Call sync at session boundaries**
+
+- On startup (APP mode): call `restore_session_from_volume()` to resume interrupted sessions
+- After each iteration: call `sync_session_to_volume()` to persist state to Volume
+- Only syncs when `MLFLOW_AGENT_VOLUME_PATH` is set and runtime is APP
+
+```python
+# In run_autonomous(), after set_session_dir():
+#   if runtime.context == RuntimeContext.DATABRICKS_APP and volume_path:
+#       restore_session_from_volume(config.session_id, volume_path, sessions_base)
+#
+# After each iteration (initializer/worker completes):
+#   if runtime.context == RuntimeContext.DATABRICKS_APP and volume_path:
+#       sync_session_to_volume(session_dir, volume_path)
+```
+
+**What does NOT change**:
+- **Prompts** (`prompts/`) — use `{session_dir}` which resolves at runtime; storage is infrastructure-level
+- **`src/core/files.py`** — already has the correct Files API implementation (`uc_volume_write`, `uc_volume_read`, `uc_volume_list`)
+- **`src/agent/tools.py`** — MCP tools are unaffected; they operate on the resolved session directory
+
+---
+
+### Feature 5.2.2: Apps Authentication Architecture
+
+**Status**: ⬜ Not Started
+
+**Problem**: Three auth identities exist in Databricks Apps — service principal (SP), personal access token (PAT), and on-behalf-of (OBO) — and two code paths currently mix them up, which would cause runtime failures.
+
+**Auth path diagram**:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Databricks App Runtime                          │
+│                                                                     │
+│  ┌─── SP (auto-injected) ────────────────────────────────────────┐  │
+│  │  DATABRICKS_CLIENT_ID / DATABRICKS_CLIENT_SECRET              │  │
+│  │  → WorkspaceClient() (default auth)                           │  │
+│  │  → MLflow tracking, UC Volumes, Workspace files               │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  ┌─── PAT (from secret scope) ───────────────────────────────────┐  │
+│  │  ANTHROPIC_AUTH_TOKEN (valueFrom: secrets-binding)             │  │
+│  │  → ANTHROPIC_BASE_URL + Bearer header                         │  │
+│  │  → Claude SDK → Anthropic FM API serving endpoint             │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  ┌─── OBO (per-request header) ──────────────────────────────────┐  │
+│  │  x-forwarded-access-token (injected by Apps proxy)            │  │
+│  │  → get_obo_token() → WorkspaceClient(token=obo)              │  │
+│  │  → Per-user file ops, user identity (current_user.me())       │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Issue 1: PAT leaking into `DATABRICKS_TOKEN`**
+
+`src/core/auth.py:configure_env()` (lines 37-42) unconditionally copies `ANTHROPIC_AUTH_TOKEN` into `DATABRICKS_TOKEN`. In Apps, this overrides the SP's OAuth M2M auth (`DATABRICKS_CLIENT_ID`/`SECRET`) with a PAT that lacks the SP's resource binding permissions. MLflow tracking, UC Volume writes, and Workspace file ops would all fail with permission errors.
+
+**Fix**: Skip the `DATABRICKS_TOKEN` assignment when running as a Databricks App:
+
+```python
+# In src/core/auth.py, configure_env():
+from .runtime import detect_runtime, RuntimeContext
+
+runtime = detect_runtime()
+
+# 2. Set DATABRICKS_TOKEN from ANTHROPIC_AUTH_TOKEN if available
+# Skip in APP mode — SP uses CLIENT_ID/SECRET (OAuth M2M), not PAT
+if runtime.context != RuntimeContext.DATABRICKS_APP:
+    if not os.getenv("DATABRICKS_TOKEN"):
+        if token := os.getenv("ANTHROPIC_AUTH_TOKEN"):
+            os.environ["DATABRICKS_TOKEN"] = token
+            configured["DATABRICKS_TOKEN"] = "***"
+```
+
+**Issue 2: Missing `DATABRICKS_HOST` in `app.yaml`**
+
+`WorkspaceClientManager.get_user_client()` in `src/core/files.py:58` requires `DATABRICKS_HOST` to create OBO clients. In Apps, the Databricks SDK can auto-detect the host for the SP client, but OBO client creation happens before `configure_env()` runs (or may be called independently). Without `DATABRICKS_HOST` in the environment, OBO falls back to SP silently.
+
+**Fix**: Add `DATABRICKS_HOST` to `app.yaml` env section and the corresponding variable to `databricks.yml`:
+
+```yaml
+# In app.yaml, add to env:
+- name: DATABRICKS_HOST
+  value: "${var.workspace_host}"
+```
+
+```yaml
+# In databricks.yml, add to variables:
+variables:
+  workspace_host:
+    description: "Databricks workspace URL (e.g., https://my-workspace.databricks.com)"
+```
+
+**What works correctly** (no changes needed):
+- **OBO token extraction** (`src/app/auth.py:get_obo_token()`) — correctly reads `x-forwarded-access-token` from Streamlit headers
+- **SP singleton** (`src/core/files.py:WorkspaceClientManager.get_service_client()`) — uses default `WorkspaceClient()` which auto-discovers SP credentials
+- **Anthropic env vars** (`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY=""`) — correctly configured in `app.yaml`
+- **OBO→SP fallback** (`WorkspaceClientManager.get_client()`) — returns SP client when no OBO token available
+
+**Code changes summary**:
+
+| File | Change |
+|------|--------|
+| `src/core/auth.py` | Guard PAT→TOKEN assignment with `runtime.context != DATABRICKS_APP` |
+| `app.yaml` | Add `DATABRICKS_HOST` env var |
+| `databricks.yml` | Add `workspace_host` variable |
 
 ---
 
@@ -415,4 +638,9 @@ When a phase is complete, archive it to keep this spec focused on remaining work
 
 **Phase 5 (Deployment)**:
 - `app.yaml` (new)
-- `databricks.yml` (add apps section)
+- `databricks.yml` (add apps section + `workspace_host` variable)
+- `src/core/runtime.py` (local-first path for APP mode)
+- `src/core/config.py` (timestamp-based APP session ID)
+- `src/core/auth.py` (skip PAT→TOKEN in APP mode)
+- `src/agent/mlflow_ops.py` (add Volume sync functions)
+- `src/agent/autonomous.py` (call sync at session boundaries)
