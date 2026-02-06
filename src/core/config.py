@@ -37,6 +37,9 @@ class Config:
     # Session (auto-generated if not provided)
     session_id: str = ""
 
+    # OBO token (set by Streamlit app, not from env vars)
+    user_token: Optional[str] = None
+
     @classmethod
     def from_env(cls, validate: bool = True) -> "Config":
         """Load configuration from environment variables."""

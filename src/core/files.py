@@ -9,7 +9,7 @@ Single entry point: use functions directly, WorkspaceClient is lazily imported.
 
 import logging
 import os
-from functools import lru_cache
+import threading
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,63 @@ class FilesSDKError(Exception):
 # =============================================================================
 
 
-@lru_cache(maxsize=1)
+class WorkspaceClientManager:
+    """Manages WorkspaceClient instances.
+
+    Service client (no token) is cached as a singleton.
+    OBO clients (with user_token) are never cached -- each call creates a fresh client.
+    """
+
+    _service_client = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def get_service_client(cls):
+        """Get cached service-principal WorkspaceClient."""
+        if cls._service_client is None:
+            with cls._lock:
+                if cls._service_client is None:
+                    try:
+                        from databricks.sdk import WorkspaceClient
+                        cls._service_client = WorkspaceClient()
+                    except ImportError:
+                        raise FilesSDKError(
+                            "[Files] databricks-sdk not installed. Run: pip install databricks-sdk"
+                        )
+                    except Exception as e:
+                        raise FilesSDKError(f"[Files] Failed to create WorkspaceClient: {e}")
+        return cls._service_client
+
+    @classmethod
+    def get_user_client(cls, user_token: str):
+        """Create a fresh OBO WorkspaceClient (never cached)."""
+        host = os.getenv("DATABRICKS_HOST")
+        if not host:
+            raise FilesSDKError("[Files] DATABRICKS_HOST required for OBO authentication")
+        try:
+            from databricks.sdk import WorkspaceClient
+            return WorkspaceClient(host=host, token=user_token)
+        except ImportError:
+            raise FilesSDKError(
+                "[Files] databricks-sdk not installed. Run: pip install databricks-sdk"
+            )
+        except Exception as e:
+            raise FilesSDKError(f"[Files] Failed to create WorkspaceClient: {e}")
+
+    @classmethod
+    def get_client(cls, user_token: Optional[str] = None):
+        """Get appropriate client: OBO if token provided, service otherwise."""
+        if user_token:
+            return cls.get_user_client(user_token)
+        return cls.get_service_client()
+
+    @classmethod
+    def clear_cache(cls):
+        """Clear cached service client (for testing)."""
+        with cls._lock:
+            cls._service_client = None
+
+
 def get_workspace_client(user_token: Optional[str] = None):
     """Get WorkspaceClient with optional on-behalf-of token.
 
@@ -39,27 +95,12 @@ def get_workspace_client(user_token: Optional[str] = None):
     Raises:
         FilesSDKError: If client creation fails
     """
-    try:
-        from databricks.sdk import WorkspaceClient
-
-        if user_token:
-            # OBO authentication with user token
-            host = os.getenv("DATABRICKS_HOST")
-            if not host:
-                raise FilesSDKError("[Files] DATABRICKS_HOST required for OBO authentication")
-            return WorkspaceClient(host=host, token=user_token)
-
-        # Default authentication (config profile or env vars)
-        return WorkspaceClient()
-    except ImportError:
-        raise FilesSDKError("[Files] databricks-sdk not installed. Run: pip install databricks-sdk")
-    except Exception as e:
-        raise FilesSDKError(f"[Files] Failed to create WorkspaceClient: {e}")
+    return WorkspaceClientManager.get_client(user_token)
 
 
 def clear_workspace_client_cache():
     """Clear cached WorkspaceClient (for testing)."""
-    get_workspace_client.cache_clear()
+    WorkspaceClientManager.clear_cache()
 
 
 # =============================================================================

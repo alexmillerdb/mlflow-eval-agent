@@ -10,7 +10,7 @@ Tools:
 
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import mlflow
 from claude_agent_sdk import tool
@@ -22,8 +22,11 @@ from ..core import files
 logger = logging.getLogger(__name__)
 
 
-def create_tools() -> list:
+def create_tools(user_token: Optional[str] = None) -> list:
     """Create the MCP tools for the agent.
+
+    Args:
+        user_token: Optional OBO token for per-user file operations.
 
     Returns:
         List of tool functions for the MCP server (9 tools total)
@@ -273,7 +276,7 @@ def create_tools() -> list:
             if not path:
                 return mlflow_ops.text_result("[Files] Error: path required")
 
-            content = files.uc_volume_read(path)
+            content = files.uc_volume_read(path, user_token=user_token)
             result = mlflow_ops.text_result(content)
             record_tool_call("uc_volume_read", len(str(args)), len(str(result)))
             return result
@@ -305,7 +308,7 @@ def create_tools() -> list:
             if not content:
                 return mlflow_ops.text_result("[Files] Error: content required")
 
-            full_path = files.uc_volume_write(path, content)
+            full_path = files.uc_volume_write(path, content, user_token=user_token)
             result = mlflow_ops.text_result(f"[Files] Written: {full_path}")
             record_tool_call("uc_volume_write", len(str(args)), len(str(result)))
             return result
@@ -331,7 +334,7 @@ def create_tools() -> list:
         try:
             path = args.get("path", "")
 
-            items = files.uc_volume_list(path)
+            items = files.uc_volume_list(path, user_token=user_token)
 
             # Format as table
             if not items:
@@ -374,7 +377,7 @@ def create_tools() -> list:
             if not path:
                 return mlflow_ops.text_result("[Workspace] Error: path required")
 
-            content = files.workspace_read(path)
+            content = files.workspace_read(path, user_token=user_token)
             result = mlflow_ops.text_result(content)
             record_tool_call("workspace_read", len(str(args)), len(str(result)))
             return result
@@ -406,7 +409,7 @@ def create_tools() -> list:
             if not content:
                 return mlflow_ops.text_result("[Workspace] Error: content required")
 
-            full_path = files.workspace_write(path, content)
+            full_path = files.workspace_write(path, content, user_token=user_token)
             result = mlflow_ops.text_result(f"[Workspace] Written: {full_path}")
             record_tool_call("workspace_write", len(str(args)), len(str(result)))
             return result
@@ -432,7 +435,7 @@ def create_tools() -> list:
         try:
             path = args.get("path", "/Workspace")
 
-            items = files.workspace_list(path)
+            items = files.workspace_list(path, user_token=user_token)
 
             # Format as table
             if not items:

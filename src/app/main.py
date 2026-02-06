@@ -104,14 +104,16 @@ def stream_agent_response(prompt: str):
     # Import here to avoid circular imports and allow lazy loading
     from src.agent.agent import MLflowAgent, setup_mlflow, AgentResult
     from src.core.config import Config
+    from src.app.auth import get_obo_token
 
     # Initialize MLflow once
     if not st.session_state.initialized:
         setup_mlflow()
         st.session_state.initialized = True
 
-    # Create agent with current config
+    # Create agent with current config + OBO token for per-user file access
     config = Config.from_env(validate=False)
+    config.user_token = get_obo_token()
     agent = MLflowAgent(config)
 
     # Track last text position for delta extraction

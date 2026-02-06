@@ -3,6 +3,8 @@
 Tests UC Volume and Workspace file operations using mocks.
 """
 
+import os
+
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 import io
@@ -543,3 +545,254 @@ class TestToolCount:
 
         tools = create_tools()
         assert len(tools) == 9
+
+
+# =============================================================================
+# WORKSPACE CLIENT MANAGER TESTS
+# =============================================================================
+
+
+class TestWorkspaceClientManager:
+    """Tests for WorkspaceClientManager caching behavior."""
+
+    def setup_method(self):
+        """Clear cache before each test."""
+        from src.core.files import WorkspaceClientManager
+        WorkspaceClientManager.clear_cache()
+
+    def teardown_method(self):
+        """Clear cache after each test."""
+        from src.core.files import WorkspaceClientManager
+        WorkspaceClientManager.clear_cache()
+
+    def test_service_client_is_cached(self):
+        """Service client should return the same object on repeated calls."""
+        from src.core.files import WorkspaceClientManager
+
+        with patch("databricks.sdk.WorkspaceClient") as mock_class:
+            mock_client = MagicMock()
+            mock_class.return_value = mock_client
+
+            client1 = WorkspaceClientManager.get_service_client()
+            client2 = WorkspaceClientManager.get_service_client()
+
+        assert client1 is client2
+        mock_class.assert_called_once()
+
+    def test_obo_clients_are_never_cached(self):
+        """OBO clients should be fresh each call (different objects)."""
+        from src.core.files import WorkspaceClientManager
+
+        with patch("databricks.sdk.WorkspaceClient") as mock_class:
+            mock_class.side_effect = [MagicMock(), MagicMock()]
+
+            with patch.dict(os.environ, {"DATABRICKS_HOST": "https://test.databricks.com"}):
+                client1 = WorkspaceClientManager.get_user_client("token-a")
+                client2 = WorkspaceClientManager.get_user_client("token-b")
+
+        assert client1 is not client2
+        assert mock_class.call_count == 2
+
+    def test_obo_does_not_evict_service_client(self):
+        """Creating OBO client should not affect cached service client."""
+        from src.core.files import WorkspaceClientManager
+
+        service_mock = MagicMock(name="service")
+        obo_mock = MagicMock(name="obo")
+
+        with patch("databricks.sdk.WorkspaceClient") as mock_class:
+            mock_class.side_effect = [service_mock, obo_mock]
+
+            # Cache service client first
+            svc = WorkspaceClientManager.get_service_client()
+            assert svc is service_mock
+
+            # Create OBO client
+            with patch.dict(os.environ, {"DATABRICKS_HOST": "https://test.databricks.com"}):
+                obo = WorkspaceClientManager.get_user_client("token-x")
+
+            assert obo is obo_mock
+
+        # Service client should still be the original cached one
+        svc_again = WorkspaceClientManager.get_service_client()
+        assert svc_again is service_mock
+
+    def test_clear_cache_resets_service_client(self):
+        """clear_cache should allow creating a new service client."""
+        from src.core.files import WorkspaceClientManager
+
+        mock1 = MagicMock(name="first")
+        mock2 = MagicMock(name="second")
+
+        with patch("databricks.sdk.WorkspaceClient") as mock_class:
+            mock_class.return_value = mock1
+            client1 = WorkspaceClientManager.get_service_client()
+
+            WorkspaceClientManager.clear_cache()
+
+            mock_class.return_value = mock2
+            client2 = WorkspaceClientManager.get_service_client()
+
+        assert client1 is mock1
+        assert client2 is mock2
+        assert client1 is not client2
+
+    def test_thread_safety(self):
+        """Concurrent calls should all get the same service client."""
+        import concurrent.futures
+        from src.core.files import WorkspaceClientManager
+
+        mock_client = MagicMock()
+
+        with patch("databricks.sdk.WorkspaceClient", return_value=mock_client):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [
+                    executor.submit(WorkspaceClientManager.get_service_client)
+                    for _ in range(10)
+                ]
+                results = [f.result() for f in futures]
+
+        # All 10 calls should return the exact same object
+        assert all(r is mock_client for r in results)
+
+    def test_get_client_dispatches_to_service(self):
+        """get_client(None) should return service client."""
+        from src.core.files import WorkspaceClientManager
+
+        with patch("databricks.sdk.WorkspaceClient") as mock_class:
+            mock_client = MagicMock()
+            mock_class.return_value = mock_client
+
+            client = WorkspaceClientManager.get_client(None)
+
+        assert client is mock_client
+
+    def test_get_client_dispatches_to_obo(self, monkeypatch):
+        """get_client(token) should return OBO client."""
+        from src.core.files import WorkspaceClientManager
+
+        monkeypatch.setenv("DATABRICKS_HOST", "https://test.databricks.com")
+
+        with patch("databricks.sdk.WorkspaceClient") as mock_class:
+            mock_client = MagicMock()
+            mock_class.return_value = mock_client
+
+            client = WorkspaceClientManager.get_client("user-token")
+
+        mock_class.assert_called_once_with(
+            host="https://test.databricks.com", token="user-token"
+        )
+
+
+# =============================================================================
+# TOKEN THREADING TESTS
+# =============================================================================
+
+
+class TestToolTokenThreading:
+    """Tests that user_token is properly threaded through tool closures."""
+
+    @pytest.fixture(autouse=True)
+    def setup_env(self, monkeypatch, session_dir):
+        """Set up environment and session directory."""
+        monkeypatch.setenv("UC_CATALOG_NAME", "users")
+        monkeypatch.setenv("UC_SCHEMA_NAME", "test_user")
+        monkeypatch.setenv("UC_VOLUME", "test_volume")
+
+    @pytest.mark.asyncio
+    async def test_uc_volume_read_passes_user_token(self, session_dir):
+        """uc_volume_read tool should pass user_token to files.uc_volume_read."""
+        from src.agent.tools import create_tools
+        from tests.test_tools_unit import get_tool_by_name
+
+        tools = create_tools(user_token="test-obo-token")
+        read_tool = get_tool_by_name(tools, "uc_volume_read")
+
+        with patch("src.core.files.uc_volume_read", return_value="content") as mock_read:
+            await read_tool({"path": "test.txt"})
+
+        mock_read.assert_called_once_with("test.txt", user_token="test-obo-token")
+
+    @pytest.mark.asyncio
+    async def test_uc_volume_write_passes_user_token(self, session_dir):
+        """uc_volume_write tool should pass user_token to files.uc_volume_write."""
+        from src.agent.tools import create_tools
+        from tests.test_tools_unit import get_tool_by_name
+
+        tools = create_tools(user_token="test-obo-token")
+        write_tool = get_tool_by_name(tools, "uc_volume_write")
+
+        with patch("src.core.files.uc_volume_write", return_value="/Volumes/test/f.txt") as mock_write:
+            await write_tool({"path": "f.txt", "content": "data"})
+
+        mock_write.assert_called_once_with("f.txt", "data", user_token="test-obo-token")
+
+    @pytest.mark.asyncio
+    async def test_uc_volume_list_passes_user_token(self, session_dir):
+        """uc_volume_list tool should pass user_token to files.uc_volume_list."""
+        from src.agent.tools import create_tools
+        from tests.test_tools_unit import get_tool_by_name
+
+        tools = create_tools(user_token="test-obo-token")
+        list_tool = get_tool_by_name(tools, "uc_volume_list")
+
+        with patch("src.core.files.uc_volume_list", return_value=[]) as mock_list:
+            await list_tool({"path": ""})
+
+        mock_list.assert_called_once_with("", user_token="test-obo-token")
+
+    @pytest.mark.asyncio
+    async def test_workspace_read_passes_user_token(self, session_dir):
+        """workspace_read tool should pass user_token to files.workspace_read."""
+        from src.agent.tools import create_tools
+        from tests.test_tools_unit import get_tool_by_name
+
+        tools = create_tools(user_token="test-obo-token")
+        read_tool = get_tool_by_name(tools, "workspace_read")
+
+        with patch("src.core.files.workspace_read", return_value="content") as mock_read:
+            await read_tool({"path": "/Users/test/file.py"})
+
+        mock_read.assert_called_once_with("/Users/test/file.py", user_token="test-obo-token")
+
+    @pytest.mark.asyncio
+    async def test_workspace_write_passes_user_token(self, session_dir):
+        """workspace_write tool should pass user_token to files.workspace_write."""
+        from src.agent.tools import create_tools
+        from tests.test_tools_unit import get_tool_by_name
+
+        tools = create_tools(user_token="test-obo-token")
+        write_tool = get_tool_by_name(tools, "workspace_write")
+
+        with patch("src.core.files.workspace_write", return_value="/Workspace/f.py") as mock_write:
+            await write_tool({"path": "/Users/test/f.py", "content": "code"})
+
+        mock_write.assert_called_once_with("/Users/test/f.py", "code", user_token="test-obo-token")
+
+    @pytest.mark.asyncio
+    async def test_workspace_list_passes_user_token(self, session_dir):
+        """workspace_list tool should pass user_token to files.workspace_list."""
+        from src.agent.tools import create_tools
+        from tests.test_tools_unit import get_tool_by_name
+
+        tools = create_tools(user_token="test-obo-token")
+        list_tool = get_tool_by_name(tools, "workspace_list")
+
+        with patch("src.core.files.workspace_list", return_value=[]) as mock_list:
+            await list_tool({"path": "/Users/test"})
+
+        mock_list.assert_called_once_with("/Users/test", user_token="test-obo-token")
+
+    @pytest.mark.asyncio
+    async def test_tools_pass_none_when_no_token(self, session_dir):
+        """Tools should pass user_token=None when create_tools has no token."""
+        from src.agent.tools import create_tools
+        from tests.test_tools_unit import get_tool_by_name
+
+        tools = create_tools()  # No user_token
+        read_tool = get_tool_by_name(tools, "uc_volume_read")
+
+        with patch("src.core.files.uc_volume_read", return_value="content") as mock_read:
+            await read_tool({"path": "test.txt"})
+
+        mock_read.assert_called_once_with("test.txt", user_token=None)

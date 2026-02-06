@@ -6,7 +6,6 @@ All subprocesses will inherit the configured environment.
 
 import logging
 import os
-from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +53,14 @@ def configure_env() -> dict[str, str]:
     return configured
 
 
-@lru_cache
 def _detect_databricks_host() -> str | None:
-    """Detect Databricks workspace host URL."""
+    """Detect Databricks workspace host URL.
+
+    Uses WorkspaceClientManager so the service client is cached and shared.
+    """
     try:
-        from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
+        from .files import WorkspaceClientManager
+        w = WorkspaceClientManager.get_service_client()
         return w.config.host.rstrip("/") if w.config.host else None
     except Exception:
         return None

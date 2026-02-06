@@ -4,6 +4,61 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+# =============================================================================
+# OBO TOKEN EXTRACTION
+# =============================================================================
+
+
+class TestGetOboToken:
+    """Tests for get_obo_token function."""
+
+    def test_extracts_token_from_streamlit_headers(self):
+        """Returns token when x-forwarded-access-token header present."""
+        from src.app.auth import get_obo_token
+
+        mock_context = MagicMock()
+        mock_context.headers.get.return_value = "obo-token-abc123"
+
+        with patch("streamlit.context", mock_context):
+            result = get_obo_token()
+
+        assert result == "obo-token-abc123"
+        mock_context.headers.get.assert_called_once_with("x-forwarded-access-token")
+
+    def test_returns_none_when_no_header(self):
+        """Returns None when header is not present."""
+        from src.app.auth import get_obo_token
+
+        mock_context = MagicMock()
+        mock_context.headers.get.return_value = None
+
+        with patch("streamlit.context", mock_context):
+            result = get_obo_token()
+
+        assert result is None
+
+    def test_returns_none_outside_streamlit(self):
+        """Returns None when not running in Streamlit."""
+        from src.app.auth import get_obo_token
+
+        with patch.dict("sys.modules", {"streamlit": None}):
+            result = get_obo_token()
+
+        assert result is None
+
+    def test_returns_none_on_exception(self):
+        """Returns None on any exception (e.g. missing context)."""
+        from src.app.auth import get_obo_token
+
+        mock_context = MagicMock()
+        mock_context.headers.get.side_effect = RuntimeError("no request context")
+
+        with patch("streamlit.context", mock_context):
+            result = get_obo_token()
+
+        assert result is None
+
+
 class TestGetCurrentUser:
     """Tests for get_current_user function."""
 
@@ -53,9 +108,32 @@ class TestGetCurrentUser:
             "src.core.files.get_workspace_client",
             side_effect=Exception("Connection failed"),
         ):
-            result = get_current_user()
+            with patch("src.app.auth.get_obo_token", return_value=None):
+                result = get_current_user()
 
         assert result is None
+
+    def test_get_current_user_passes_obo_token(self):
+        """Passes OBO token to get_workspace_client."""
+        from src.app.auth import get_current_user
+
+        mock_user = MagicMock()
+        mock_user.user_name = "user@company.com"
+        mock_user.display_name = "User"
+        mock_user.id = "u-1"
+
+        mock_client = MagicMock()
+        mock_client.current_user.me.return_value = mock_user
+
+        with patch("src.app.auth.get_obo_token", return_value="obo-xyz"):
+            with patch(
+                "src.core.files.get_workspace_client",
+                return_value=mock_client,
+            ) as mock_get_client:
+                result = get_current_user()
+
+        mock_get_client.assert_called_once_with(user_token="obo-xyz")
+        assert result["user_name"] == "user@company.com"
 
 
 class MockSessionState(dict):

@@ -142,7 +142,7 @@ class MLflowAgent:
     @mlflow.trace
     def _build_options(self, session_id: Optional[str] = None) -> ClaudeAgentOptions:
         """Build agent options with simplified tool set."""
-        tools = create_tools()
+        tools = create_tools(user_token=self.config.user_token)
 
         mcp_server = create_sdk_mcp_server(
             name="mlflow-eval",

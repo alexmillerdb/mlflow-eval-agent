@@ -5,10 +5,28 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def get_obo_token() -> Optional[str]:
+    """Extract on-behalf-of token from Streamlit request headers.
+
+    In Databricks Apps, the proxy injects `x-forwarded-access-token`
+    containing the logged-in user's OAuth token.
+
+    Returns:
+        OBO token string, or None if not available.
+    """
+    try:
+        import streamlit as st
+        return st.context.headers.get("x-forwarded-access-token")
+    except Exception:
+        return None
+
+
 def get_current_user() -> Optional[dict]:
     """Get current user info from Databricks.
 
     Uses the WorkspaceClient to fetch the current authenticated user's info.
+    When running in Databricks Apps, uses the OBO token so the identity
+    reflects the logged-in user rather than the service principal.
 
     Returns:
         dict with user_name, display_name, id or None on failure.
@@ -16,7 +34,8 @@ def get_current_user() -> Optional[dict]:
     try:
         from src.core.files import get_workspace_client
 
-        client = get_workspace_client()
+        user_token = get_obo_token()
+        client = get_workspace_client(user_token=user_token)
         me = client.current_user.me()
         return {
             "user_name": me.user_name,

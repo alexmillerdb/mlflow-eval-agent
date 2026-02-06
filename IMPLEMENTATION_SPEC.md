@@ -155,9 +155,6 @@ command:
   - streamlit
   - run
   - src/app/main.py
-  - --server.port=8080
-  - --server.address=0.0.0.0
-  - --server.headless=true
 
 # Environment variables
 env:
